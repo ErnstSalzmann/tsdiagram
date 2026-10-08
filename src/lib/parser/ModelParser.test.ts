@@ -3139,6 +3139,8 @@ it("qualifies a function inside a namespace and keeps its type parameters", () =
   expect(wrap?.type).toBe("function");
   expect(wrap?.arguments).toEqual([{ name: "T", extends: "object" }]);
   expect(wrap?.dependencies.map((m) => m.name)).toEqual(["Box"]);
+});
+
 it("renders a branded primitive as its declared type, not as the members of String", () => {
   const parser = new ModelParser(`
     declare const brand: unique symbol;
