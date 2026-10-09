@@ -52,4 +52,11 @@ pnpm dev                                   # or pnpm preview after pnpm build
 node bin/tsdiagram-export.mjs src/domain.ts docs/domain.svg --png --url http://localhost:5173
 ```
 
+The input can also be several `.ts` files, or a folder. A folder means every `.ts` file in it that is not a test (`*.test.ts`, `*.spec.ts`) and not a `.d.ts`, sorted by name. The files are bundled into 1 document with 1 section per file: the `import` statements and the `export ... from` re-exports are dropped, an `index.ts` that holds only re-exports is skipped, and each file is wrapped in `// #region <file name>` and `// #endregion`. The parser does not nest sections, so the inner `#region` markers of a file are dropped, with a note. The output defaults to `<folder name>.svg`, or to the first input with `.svg`.
+
+```sh
+node bin/tsdiagram-export.mjs src/domain docs/domain.svg --png --view functions --direction vertical
+node bin/tsdiagram-export.mjs src/domain/ids.ts src/domain/plan.ts --png
+```
+
 Options: `--view functions` renders only the functions and the types they use, `--direction vertical` lays the diagram out top to bottom (both become `?view=` and `?direction=` query parameters, which the app applies over the stored options), `--png` also writes `<output>.png`, `--scale 2` sets the PNG resolution and `--max-side 4096` caps its longer side (Chrome paints only part of a larger page), `--url` is where the app runs (default `http://localhost:5173`), `--chrome <path>` or `CHROME=` points at the browser, `--timeout 60` is the wait in seconds, `--verbose` logs each step. It needs Node 22 or later and Google Chrome or Chromium. No other dependency.

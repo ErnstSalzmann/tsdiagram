@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-// Export a TypeScript file to SVG (and PNG) from the command line.
+// Export TypeScript files to SVG (and PNG) from the command line.
 //
-// Usage: tsdiagram-export <input.ts> [output.svg] [--png] [--scale 2] [--max-side 4096]
+// Usage: tsdiagram-export <input...> [output.svg] [--png] [--scale 2] [--max-side 4096]
 //          [--view all|functions] [--direction horizontal|vertical]
 //          [--url http://localhost:5173] [--chrome <path>] [--timeout 60] [--verbose]
 //
-// It opens the app in headless Chrome with the file as the current document
-// and `?export=svg`, waits until the page publishes the SVG, and writes it.
+// The input is 1 or more `.ts` files, or a folder. Several files are bundled
+// into 1 document with 1 section per file, see `bundle.mjs`. It opens the app
+// in headless Chrome with the document as the current one and `?export=svg`,
+// waits until the page publishes the SVG, and writes it.
 // `--png` renders the SVG to PNG with a second Chrome run.
 //
 // Needs Node 22 or later (global WebSocket and fetch) and Google Chrome or
@@ -17,6 +19,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { discoverFiles, readBundle } from "./bundle.mjs";
 import { buildShareUrl, readSvgSize } from "./share-url.mjs";
 
 const CHROME_CANDIDATES = [
@@ -53,9 +56,11 @@ const parseArgs = (argv) => {
     else if (argument === "--verbose") options.verbose = true;
     else positional.push(argument);
   }
-  options.input = positional[0];
+  const output = positional.length > 1 && positional.at(-1).endsWith(".svg") ? positional.pop() : null;
+  options.inputs = positional;
+  // The default output is next to the first input: `src/domain.ts` and `src/domain/` both give `src/domain.svg`.
   options.output =
-    positional[1] ?? (options.input ? options.input.replace(/\.[cm]?tsx?$/, "") + ".svg" : null);
+    output ?? (positional[0] ? positional[0].replace(/\/+$/, "").replace(/\.[cm]?tsx?$/, "") + ".svg" : null);
   return options;
 };
 
@@ -220,15 +225,24 @@ const renderPng = async ({ chrome, svgPath, pngPath, scale, maxSide }) => {
 
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
-  if (options.help || !options.input) {
+  if (options.help || options.inputs.length === 0) {
     console.log(
-      "Usage: tsdiagram-export <input.ts> [output.svg] [--png] [--scale 2] [--view all|functions] [--direction horizontal|vertical] [--url http://localhost:5173] [--chrome <path>] [--timeout 60]"
+      "Usage: tsdiagram-export <input...> [output.svg] [--png] [--scale 2] [--view all|functions] [--direction horizontal|vertical] [--url http://localhost:5173] [--chrome <path>] [--timeout 60]"
     );
     process.exit(options.help ? 0 : 1);
   }
   const chrome = findChrome(options.chrome);
-  const source = await readFile(options.input, "utf8");
-  const pageUrl = buildShareUrl(options.url, source, path.basename(options.input), {
+  const files = await discoverFiles(options.inputs);
+  if (files.length === 0) throw new Error("No .ts file found in the input.");
+  // 1 file goes through unchanged; the bundle is for a domain that is split into modules.
+  const bundle = files.length > 1 || files[0].path !== options.inputs[0];
+  log(bundle ? `bundling ${files.map((file) => file.name).join(", ")}` : `reading ${files[0].path}`);
+  const source = bundle ? await readBundle(files) : await readFile(files[0].path, "utf8");
+  if (bundle && source.includes("inner section marker(s) dropped")) {
+    console.error("note: inner section markers dropped, the parser does not nest sections");
+  }
+  const title = bundle ? path.basename(options.output, ".svg") : path.basename(files[0].path);
+  const pageUrl = buildShareUrl(options.url, source, title, {
     direction: options.direction,
     view: options.view,
   });
