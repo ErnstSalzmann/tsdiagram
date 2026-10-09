@@ -1,10 +1,11 @@
-import { Fragment, memo, ReactNode, useEffect, useId, useMemo, useRef } from "react";
+import { memo, ReactNode, useEffect, useId, useMemo, useRef } from "react";
 import { Handle, Position, useUpdateNodeInternals } from "@xyflow/react";
 import classNames from "classnames";
 import {
   FunctionSchemaField,
   InlineObjectMember,
   isArraySchemaField,
+  isDefaultSchemaField,
   isFunctionSchemaField,
   isGenericSchemaField,
   isInlineObjectMember,
@@ -45,9 +46,10 @@ const MODEL_NODE_CLASSES = {
     primitiveTypeColor: "text-text-muted",
     literalTypeColor: "text-code-literal",
   },
-  /** The box of an inline object: the look of the rows of the node, with a thin border and less padding. */
+  /** The box of an inline object: a small node inside the row, with its own header bar. */
   nested: {
-    root: "my-0.5 border border-border",
+    root: "my-1 overflow-hidden rounded-md border border-border bg-pane",
+    header: "min-h-1.5 bg-brand px-1.5 py-0.5 text-xs font-strong text-brand-fg",
     keyCell: "py-0.5 pr-3 pl-1.5 text-text align-top whitespace-nowrap",
     typeCell: "relative py-0.5 pr-1.5 break-words",
   },
@@ -236,8 +238,36 @@ const FunctionStack = ({ context, field }: { context: FieldContext; field: Funct
   );
 };
 
-const NestedObject = ({ context, members }: { context: FieldContext; members: SchemaField[] }) => (
+/**
+ * Finds the key that names the members of a union of inline objects: a
+ * property that every member has with a string literal type, like `kind`.
+ */
+const findDiscriminant = (objects: InlineObjectMember[]): string | null => {
+  if (objects.length < 2) return null;
+  const isLiteralMember = (member: SchemaField) =>
+    isDefaultSchemaField(member) && typeof member.type === "string" && /^["']/.test(member.type);
+  const [first] = objects;
+  for (const candidate of first.members) {
+    if (!isLiteralMember(candidate)) continue;
+    const shared = objects.every((object) =>
+      object.members.some((member) => member.name === candidate.name && isLiteralMember(member))
+    );
+    if (shared) return candidate.name;
+  }
+  return null;
+};
+
+const NestedObject = ({
+  context,
+  members,
+  header,
+}: {
+  context: FieldContext;
+  members: SchemaField[];
+  header?: ReactNode;
+}) => (
   <div className={MODEL_NODE_CLASSES.nested.root}>
+    <div className={MODEL_NODE_CLASSES.nested.header}>{header}</div>
     <table className="w-full">
       <tbody>
         {members.map((member, index) => (
@@ -248,21 +278,30 @@ const NestedObject = ({ context, members }: { context: FieldContext; members: Sc
   </div>
 );
 
-/** Inline objects stack as boxes. The other members follow as 1 line of text. */
+/**
+ * Inline objects stack as small nodes with an open line between them. The
+ * discriminant of the union, for example `kind: "held"`, moves into the
+ * header of each box. The other members follow as 1 line of text.
+ */
 const UnionWithObjects = ({ context, field }: { context: FieldContext; field: UnionSchemaField }) => {
   const objects = field.types.filter(isInlineObjectMember);
   const others = field.types.filter(isTextOrModel);
+  const discriminant = findDiscriminant(objects);
   return (
-    <div className="flex flex-col text-left">
-      {objects.map((object, index) => (
-        <Fragment key={index}>
-          {index > 0 && <Muted>|</Muted>}
-          <NestedObject context={context} members={object.members} />
-        </Fragment>
-      ))}
+    <div className="flex flex-col gap-1 text-left">
+      {objects.map((object, index) => {
+        const tag = discriminant ? object.members.find((member) => member.name === discriminant) : undefined;
+        const members = tag ? object.members.filter((member) => member !== tag) : object.members;
+        const header = tag && isDefaultSchemaField(tag) && (
+          <span>
+            <span className="opacity-70">{tag.name}: </span>
+            <TypeValue context={context} value={tag.type} />
+          </span>
+        );
+        return <NestedObject key={index} context={context} header={header} members={members} />;
+      })}
       {others.length > 0 && (
         <Muted>
-          {"| "}
           <Separated
             items={others.map((type, index) => (
               <TypeValue key={index} context={context} value={type} />
