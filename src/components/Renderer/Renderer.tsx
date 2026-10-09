@@ -748,7 +748,7 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
               <MiniMap
                 bgColor="var(--color-pane)"
                 className="overflow-hidden rounded-lg border border-border shadow-(--shadow-card)"
-                maskColor="var(--color-border)"
+                maskColor="color-mix(in oklch, var(--color-border) 55%, transparent)"
                 nodeColor={minimapNodeColor}
                 nodeStrokeColor={minimapNodeStrokeColor}
                 nodeStrokeWidth={6}
