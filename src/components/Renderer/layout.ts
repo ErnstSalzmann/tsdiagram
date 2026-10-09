@@ -1,4 +1,4 @@
-import { Edge, Node } from "@xyflow/react";
+import { Edge, Node, NodeChange } from "@xyflow/react";
 import ElkConstructor, { ELK, ElkNode, LayoutOptions } from "elkjs/lib/elk-api";
 import {
   isArraySchemaField,
@@ -34,6 +34,8 @@ export type ModelNodeState = Node<{
 }>;
 /** The boundary that is drawn behind the nodes of one section. It is derived after the layout. */
 export type SectionNodeState = Node<{ title: string }, "section">;
+export const SECTION_NODE_ID_PREFIX = "section:";
+export const isSectionNodeId = (id: string) => id.startsWith(SECTION_NODE_ID_PREFIX);
 export type RendererNodeState = ModelNodeState | SectionNodeState;
 
 export const isModelNode = (node: RendererNodeState): node is ModelNodeState => node.type === "model";
@@ -712,11 +714,58 @@ export const computeSectionGroups = (models: Model[]): Map<string, string> | nul
   return groups.size > 0 ? groups : null;
 };
 
+/** The member nodes of the section node `sectionNodeId`. */
+export const selectSectionMembers = (nodes: RendererNodeState[], sectionNodeId: string): ModelNodeState[] => {
+  const sectionId = sectionNodeId.slice(SECTION_NODE_ID_PREFIX.length);
+  return nodes.filter(
+    (node): node is ModelNodeState => isModelNode(node) && node.data.model.section?.id === sectionId
+  );
+};
+
+/**
+ * A section node is derived from its members, so a change for it is applied to
+ * them. A position change moves each member by the same delta, so the boundary
+ * keeps its size. Every other change for a section is dropped.
+ */
+export const expandSectionNodeChanges = (
+  changes: NodeChange<RendererNodeState>[],
+  nodes: RendererNodeState[]
+): NodeChange<ModelNodeState>[] => {
+  const result: NodeChange<ModelNodeState>[] = [];
+  for (const change of changes) {
+    if (!("id" in change) || !isSectionNodeId(change.id)) {
+      result.push(change as NodeChange<ModelNodeState>);
+      continue;
+    }
+    if (change.type !== "position" || !change.position) continue;
+    const section = nodes.find((node) => node.id === change.id);
+    if (!section) continue;
+    const dx = change.position.x - section.position.x;
+    const dy = change.position.y - section.position.y;
+    for (const member of selectSectionMembers(nodes, change.id)) {
+      result.push({
+        dragging: change.dragging,
+        id: member.id,
+        position: { x: member.position.x + dx, y: member.position.y + dy },
+        type: "position",
+      });
+    }
+  }
+  return result;
+};
+
+// `elevateNodesOnSelect` adds this to the z-index of a selected node. The boundary stays behind its members.
+const SELECTED_NODE_Z = 1000;
+
 /**
  * One boundary node per section, sized to the placed and measured member
- * nodes plus padding. The boundary takes no pointer events and no layout.
+ * nodes plus padding. The boundary takes no layout. A drag of it moves its
+ * members, see `expandSectionNodeChanges`.
  */
-export const buildSectionNodes = (nodes: ModelNodeState[]): SectionNodeState[] => {
+export const buildSectionNodes = (
+  nodes: ModelNodeState[],
+  selectedSectionNodeIds: ReadonlySet<string> = NO_PINNED_IDS
+): SectionNodeState[] => {
   const boxes = new Map<
     string,
     { title: string; order: number; left: number; top: number; right: number; bottom: number }
@@ -743,19 +792,18 @@ export const buildSectionNodes = (nodes: ModelNodeState[]): SectionNodeState[] =
     .map(([id, box]) => {
       const width = box.right - box.left + SECTION_PAD_PX * 2;
       const height = box.bottom - box.top + SECTION_PAD_PX + SECTION_TITLE_PAD_PX;
+      const selected = selectedSectionNodeIds.has(`${SECTION_NODE_ID_PREFIX}${id}`);
       return {
         connectable: false,
         data: { title: box.title },
-        draggable: false,
-        focusable: false,
         height,
-        id: `section:${id}`,
+        id: `${SECTION_NODE_ID_PREFIX}${id}`,
         measured: { height, width },
         position: { x: box.left - SECTION_PAD_PX, y: box.top - SECTION_TITLE_PAD_PX },
-        selectable: false,
+        selected,
         type: "section",
         width,
-        zIndex: -1,
+        zIndex: selected ? -1 - SELECTED_NODE_Z : -1,
       };
     });
 };

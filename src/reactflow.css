@@ -75,16 +75,17 @@
   stroke: transparent;
 }
 
-.react-flow__node-section {
-  pointer-events: none;
-}
-
 .section-node {
   width: 100%;
   height: 100%;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
   background: color-mix(in oklab, var(--color-accent) 4%, transparent);
+}
+
+.react-flow__node-section.selected .section-node {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
 }
 
 .section-node-title {
