@@ -31,6 +31,13 @@ export const Preferences = ({ isOpen, onClose }: PreferencesProps) => {
     optionsStore.state.save();
   };
 
+  const handleCollapseLeavesChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    // re-enable auto-fit so the relayout this triggers is brought into view
+    optionsStore.state.renderer.autoFitView = true;
+    optionsStore.state.renderer.collapseLeaves = event.target.checked;
+    optionsStore.state.save();
+  };
+
   const handleCompactLayoutChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     // re-enable auto-fit so the relayout this triggers is brought into view
     optionsStore.state.renderer.autoFitView = true;
@@ -186,6 +193,19 @@ export const Preferences = ({ isOpen, onClose }: PreferencesProps) => {
                       />
                       <label className="check-label" htmlFor="badge-hubs">
                         Collapse hub types into badges
+                      </label>
+                    </div>
+
+                    <div className="check-row">
+                      <input
+                        checked={options.renderer.collapseLeaves}
+                        className="check-input"
+                        id="collapse-leaves"
+                        type="checkbox"
+                        onChange={handleCollapseLeavesChange}
+                      />
+                      <label className="check-label" htmlFor="collapse-leaves">
+                        Collapse leaf types
                       </label>
                     </div>
 

@@ -14,7 +14,6 @@ import {
   FitViewOptions,
   MarkerType,
   MiniMap,
-  NodeChange,
   OnNodesChange,
   Panel,
   ReactFlow,
@@ -44,9 +43,11 @@ import {
   computeFunctionPartitions,
   computeSectionGroups,
   decorateModelEdges,
+  expandSectionNodeChanges,
   extractModelEdges,
   extractModelNodes,
   isModelNode,
+  isSectionNodeId,
   isUnplacedNode,
   LAYOUT_RESET_NODE_COUNT_CHANGE_THRESHOLD,
   LAYOUT_RESET_NODE_OVERLAP_THRESHOLD,
@@ -55,7 +56,9 @@ import {
   ModelNodeState,
   normalizeLayoutEdges,
   RendererNodeState,
+  selectCollapsedLeafIds,
   selectFunctionsView,
+  selectSectionMembers,
   shouldResetLayoutAnchors,
 } from "./layout";
 import { ModelNode } from "./ModelNode";
@@ -85,10 +88,28 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
   const reactFlowStore = useStoreApi();
   const updateNodeInternals = useUpdateNodeInternals();
   const [nodes, setNodes, onNodesChange] = useNodesState<ModelNodeState>([]);
-  // the section nodes are derived, so a change for one of their ids finds no node and is dropped
+  const [selectedSectionNodeIds, setSelectedSectionNodeIds] = useState<ReadonlySet<string>>(new Set());
+  // the section nodes are derived from the model nodes: a drag of a section moves its
+  // members, and its selection is kept apart from the node state
   const handleNodesChange = useCallback<OnNodesChange<RendererNodeState>>(
-    (changes) => onNodesChange(changes as NodeChange<ModelNodeState>[]),
-    [onNodesChange]
+    (changes) => {
+      const sectionSelections = changes.filter(
+        (change) => change.type === "select" && isSectionNodeId(change.id)
+      );
+      if (sectionSelections.length > 0) {
+        setSelectedSectionNodeIds((previous) => {
+          const next = new Set(previous);
+          for (const change of sectionSelections) {
+            if (change.type !== "select") continue;
+            if (change.selected) next.add(change.id);
+            else next.delete(change.id);
+          }
+          return next;
+        });
+      }
+      onNodesChange(expandSectionNodeChanges(changes, getNodes()));
+    },
+    [getNodes, onNodesChange]
   );
   const [edges, setEdges, onEdgesChange] = useEdgesState<ModelEdge>([]);
   const cachedNodesMap = useRef<Map<string, ModelNodeState>>(new Map());
@@ -123,14 +144,22 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
   useEffect(() => {
     previousBadgeHubIdsRef.current = { documentId, ids: hubIds };
   }, [hubIds, documentId]);
-  // a model outside the view is treated like a badge hub: no node, no edges, and
-  // a pill where a visible node refers to it
+  const collapsedLeafIds = useMemo(
+    () => (options.renderer.collapseLeaves ? selectCollapsedLeafIds(models) : EMPTY_BADGE_HUB_IDS),
+    [models, options.renderer.collapseLeaves]
+  );
+  // a collapsed leaf and a model outside the view are treated like a badge hub: no
+  // node, no edges, and inline text or a pill where a visible node refers to it
   const isFunctionsView = options.renderer.view === "functions";
   const badgeHubIds = useMemo(() => {
-    if (!isFunctionsView) return hubIds;
-    const visible = new Set(selectFunctionsView(models));
-    return new Set([...hubIds, ...models.filter((model) => !visible.has(model)).map((model) => model.id)]);
-  }, [hubIds, isFunctionsView, models]);
+    if (!isFunctionsView && collapsedLeafIds.size === 0) return hubIds;
+    const visible = new Set(isFunctionsView ? selectFunctionsView(models) : models);
+    return new Set([
+      ...hubIds,
+      ...collapsedLeafIds,
+      ...models.filter((model) => !visible.has(model)).map((model) => model.id),
+    ]);
+  }, [collapsedLeafIds, hubIds, isFunctionsView, models]);
   const panelRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAnimate, setShouldAnimate] = useState(false);
@@ -168,7 +197,10 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     };
   }, [sharedEdgeProps]);
 
-  const parsedNodes = useMemo(() => extractModelNodes(models, badgeHubIds), [models, badgeHubIds]);
+  const parsedNodes = useMemo(
+    () => extractModelNodes(models, badgeHubIds, collapsedLeafIds),
+    [models, badgeHubIds, collapsedLeafIds]
+  );
   const modelEdges = useMemo(() => extractModelEdges(models, badgeHubIds), [models, badgeHubIds]);
   // the functions view orders the functions along the main axis instead of grouping by section
   const sectionGroups = useMemo(
@@ -376,7 +408,8 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
         hitCachedNodeSet.add(cachedNode);
         if (
           cachedNode.data.model === node.data.model &&
-          cachedNode.data.badgeHubIds === node.data.badgeHubIds
+          cachedNode.data.badgeHubIds === node.data.badgeHubIds &&
+          cachedNode.data.collapsedLeafIds === node.data.collapsedLeafIds
         ) {
           return cachedNode;
         }
@@ -552,9 +585,14 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     },
     [options.renderer, reactFlowStore]
   );
-  const handleNodeDragStop = useCallback((_event: MouseEvent | TouchEvent, node: RendererNodeState) => {
-    if (isModelNode(node)) manuallyMovedNodesSet.current.add(node.id);
-  }, []);
+  // a dragged section pins its members, so the next layout keeps them where they are
+  const handleNodeDragStop = useCallback(
+    (_event: MouseEvent | TouchEvent, node: RendererNodeState) => {
+      const moved = isModelNode(node) ? [node] : selectSectionMembers(getNodes(), node.id);
+      for (const movedNode of moved) manuallyMovedNodesSet.current.add(movedNode.id);
+    },
+    [getNodes]
+  );
   const handleNodeMouseEnter = useCallback((_event: React.MouseEvent, node: RendererNodeState) => {
     if (isModelNode(node)) graphStore.state.hoveredNode = node;
   }, []);
@@ -584,8 +622,8 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
   }, [fitView, fitViewOptions, options.panels.splitDirection, options.renderer]);
 
   const sectionNodes = useMemo(
-    () => (options.renderer.sections ? buildSectionNodes(nodes) : []),
-    [nodes, options.renderer.sections]
+    () => (options.renderer.sections ? buildSectionNodes(nodes, selectedSectionNodeIds) : []),
+    [nodes, options.renderer.sections, selectedSectionNodeIds]
   );
   const renderedNodes = useMemo<RendererNodeState[]>(
     () => (sectionNodes.length > 0 ? [...sectionNodes, ...nodes] : nodes),

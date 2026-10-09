@@ -16,12 +16,12 @@ import {
   UnionSchemaField,
 } from "../../lib/parser/model-types";
 import { graphStore, useIsBadgeHubHovered, useNodeDecoration } from "../../stores/graph";
-import { fieldHasSourceEdge, getTypeAliasHeaderDependencies } from "./layout";
+import { describeLeafType, fieldHasSourceEdge, getTypeAliasHeaderDependencies, isLeafModel } from "./layout";
 import { usePortColor } from "./port-colors";
 
 export type ModelNodeProps = {
   id: string;
-  data: { model: Model; badgeHubIds: ReadonlySet<string> };
+  data: { model: Model; badgeHubIds: ReadonlySet<string>; collapsedLeafIds: ReadonlySet<string> };
 };
 
 const isTextOrModel = (value: InlineObjectMember | Model | string): value is Model | string =>
@@ -103,7 +103,24 @@ const HubBadgePill = ({ refModel }: { refModel: Model }) => {
   );
 };
 
-const TypeNameSpan = ({ badgeHubIds, refModel }: { badgeHubIds: ReadonlySet<string>; refModel: Model }) => {
+/** A collapsed leaf has no node, so its name carries the declared type for a hover. */
+const LeafNameSpan = ({ refModel }: { refModel: Model }) => (
+  <span
+    className={MODEL_NODE_CLASSES.field.modelTypeColor}
+    title={isLeafModel(refModel) ? describeLeafType(refModel) : undefined}
+  >
+    {refModel.name}
+  </span>
+);
+
+type TypeNameSpanProps = {
+  badgeHubIds: ReadonlySet<string>;
+  collapsedLeafIds: ReadonlySet<string>;
+  refModel: Model;
+};
+
+const TypeNameSpan = ({ badgeHubIds, collapsedLeafIds, refModel }: TypeNameSpanProps) => {
+  if (collapsedLeafIds.has(refModel.id)) return <LeafNameSpan refModel={refModel} />;
   if (badgeHubIds.has(refModel.id)) return <HubBadgePill key={refModel.id} refModel={refModel} />;
   return <span className={MODEL_NODE_CLASSES.field.modelTypeColor}>{refModel.name}</span>;
 };
@@ -114,10 +131,18 @@ const TYPE_TEXT_COLORS = {
   reference: MODEL_NODE_CLASSES.field.modelTypeColor,
 };
 
-const TypeText = ({ segments }: { segments: TypeTextSegment[] }) => (
+type TypeTextProps = {
+  /** The collapsed leaves this model references, by name. A reference segment to one gets the hover. */
+  leavesByName?: ReadonlyMap<string, Model>;
+  segments: TypeTextSegment[];
+};
+
+const TypeText = ({ leavesByName, segments }: TypeTextProps) => (
   <span className={MODEL_NODE_CLASSES.field.defaultTypeColor}>
     {segments.map((segment, index) => {
       if (segment.kind === "default") return segment.text;
+      const leaf = segment.kind === "reference" ? leavesByName?.get(segment.text) : undefined;
+      if (leaf) return <LeafNameSpan key={index} refModel={leaf} />;
       return (
         <span key={index} className={TYPE_TEXT_COLORS[segment.kind]}>
           {segment.text}
@@ -127,7 +152,12 @@ const TypeText = ({ segments }: { segments: TypeTextSegment[] }) => (
   </span>
 );
 
-type FieldContext = { model: Model; badgeHubIds: ReadonlySet<string> };
+type FieldContext = {
+  model: Model;
+  badgeHubIds: ReadonlySet<string>;
+  collapsedLeafIds: ReadonlySet<string>;
+  leavesByName: ReadonlyMap<string, Model>;
+};
 
 const Muted = ({ children }: { children: ReactNode }) => (
   <span className={MODEL_NODE_CLASSES.field.defaultTypeColor}>{children}</span>
@@ -135,8 +165,15 @@ const Muted = ({ children }: { children: ReactNode }) => (
 
 /** A model reference as a name or a pill, or a type text with colored segments. */
 const TypeValue = ({ context, value }: { context: FieldContext; value: Model | string }) => {
-  if (isModelReference(value)) return <TypeNameSpan badgeHubIds={context.badgeHubIds} refModel={value} />;
-  return <TypeText segments={context.model.typeTextSegments[value]} />;
+  if (isModelReference(value))
+    return (
+      <TypeNameSpan
+        badgeHubIds={context.badgeHubIds}
+        collapsedLeafIds={context.collapsedLeafIds}
+        refModel={value}
+      />
+    );
+  return <TypeText leavesByName={context.leavesByName} segments={context.model.typeTextSegments[value]} />;
 };
 
 const Separated = ({ items, separator }: { items: ReactNode[]; separator: ReactNode }) => (
@@ -230,7 +267,13 @@ const FieldType = ({ context, field }: { context: FieldContext; field: SchemaFie
   const readonlyPrefix = isArraySchemaField(field) && field.readonly && <Muted>readonly </Muted>;
 
   if (isModelReference(field.type)) {
-    return <TypeNameSpan badgeHubIds={context.badgeHubIds} refModel={field.type} />;
+    return (
+      <TypeNameSpan
+        badgeHubIds={context.badgeHubIds}
+        collapsedLeafIds={context.collapsedLeafIds}
+        refModel={field.type}
+      />
+    );
   }
   if (isArraySchemaField(field)) {
     const elementText = isModelReference(field.elementType) ? "" : String(field.elementType);
@@ -248,7 +291,10 @@ const FieldType = ({ context, field }: { context: FieldContext; field: SchemaFie
   if (isGenericSchemaField(field)) {
     return (
       <Muted>
-        <TypeText segments={context.model.typeTextSegments[field.genericName]} />
+        <TypeText
+          leavesByName={context.leavesByName}
+          segments={context.model.typeTextSegments[field.genericName]}
+        />
         {"<"}
         <Separated
           items={field.arguments.map((argument, index) => (
@@ -283,7 +329,9 @@ const FieldType = ({ context, field }: { context: FieldContext; field: SchemaFie
       </div>
     );
   }
-  return <TypeText segments={context.model.typeTextSegments[field.type]} />;
+  return (
+    <TypeText leavesByName={context.leavesByName} segments={context.model.typeTextSegments[field.type]} />
+  );
 };
 
 const FieldRow = ({
@@ -329,8 +377,17 @@ const FieldRow = ({
 };
 
 const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
-  const { model, badgeHubIds } = data;
+  const { model, badgeHubIds, collapsedLeafIds } = data;
   const decoration = useNodeDecoration(model);
+  const leavesByName = useMemo(
+    () =>
+      new Map(
+        model.dependencies
+          .filter((dependency) => collapsedLeafIds.has(dependency.id))
+          .map((dependency) => [dependency.name, dependency])
+      ),
+    [collapsedLeafIds, model.dependencies]
+  );
 
   const hasSourceHandle = useMemo(() => {
     if (model.type === "interface") {
@@ -349,7 +406,10 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
     return false;
   }, [badgeHubIds, model]);
 
-  const hasTargetHandle = useMemo(() => model.dependants.length > 0, [model.dependants]);
+  const hasTargetHandle = useMemo(
+    () => model.dependants.some((dependant) => !badgeHubIds.has(dependant.id)),
+    [badgeHubIds, model.dependants]
+  );
 
   const fieldSourceHandleRows = useMemo(() => {
     const rows = new Map<string, number>();
@@ -396,7 +456,7 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
   }, [decoration, model.schema.length]);
 
   const fieldRows = useMemo(() => {
-    const context = { model, badgeHubIds };
+    const context = { model, badgeHubIds, collapsedLeafIds, leavesByName };
     return model.schema.map((field, fieldIndex) => (
       <FieldRow
         key={`${model.id}-${field.name}-${fieldIndex}`}
@@ -405,7 +465,7 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
         handle={fieldSourceHandleRows.get(field.name) === fieldIndex}
       />
     ));
-  }, [badgeHubIds, fieldSourceHandleRows, model]);
+  }, [badgeHubIds, collapsedLeafIds, fieldSourceHandleRows, leavesByName, model]);
 
   const modelName = useMemo(() => {
     const nameParts = [model.name];

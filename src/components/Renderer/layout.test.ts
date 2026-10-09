@@ -4,9 +4,11 @@ import {
   buildSectionNodes,
   compactLayoutedNodes,
   computeFunctionPartitions,
+  expandSectionNodeChanges,
   extractModelEdges,
   fieldHasSourceEdge,
   ModelNodeState,
+  selectCollapsedLeafIds,
   selectFunctionsView,
 } from "./layout";
 
@@ -15,6 +17,7 @@ const NO_PINS: ReadonlySet<string> = new Set();
 const makeNode = (id: string, x: number, y: number, width: number, height: number): ModelNodeState => ({
   data: {
     badgeHubIds: new Set<string>(),
+    collapsedLeafIds: new Set<string>(),
     model: {
       id,
       name: id,
@@ -259,6 +262,80 @@ describe("buildSectionNodes", () => {
     expect(boundary.position).toEqual({ x: 76, y: 60 });
     expect(boundary.width).toBe(448);
     expect(boundary.height).toBe(364);
+  });
+
+  it("moves every member by the delta of a section position change and keeps the box size", () => {
+    const section = { id: "section-0", title: "Core", order: 0 };
+    const a = makeNode("a", 100, 100, 200, 50);
+    const b = makeNode("b", 400, 300, 100, 100);
+    const loose = makeNode("loose", 0, 0, 50, 50);
+    a.data.model.section = section;
+    b.data.model.section = section;
+    const [boundary] = buildSectionNodes([a, b, loose]);
+
+    const changes = expandSectionNodeChanges(
+      [{ type: "position", id: boundary.id, position: { x: 86, y: 40 }, dragging: true }],
+      [boundary, a, b, loose]
+    );
+
+    expect(changes).toEqual([
+      { dragging: true, id: "a", position: { x: 110, y: 80 }, type: "position" },
+      { dragging: true, id: "b", position: { x: 410, y: 280 }, type: "position" },
+    ]);
+    const moved = [a, b].map((node) => {
+      const change = changes.find((candidate) => "id" in candidate && candidate.id === node.id);
+      return change?.type === "position" && change.position ? { ...node, position: change.position } : node;
+    });
+    const [movedBoundary] = buildSectionNodes(moved);
+    expect(movedBoundary.position).toEqual({ x: 86, y: 40 });
+    expect(movedBoundary.width).toBe(boundary.width);
+    expect(movedBoundary.height).toBe(boundary.height);
+  });
+});
+
+describe("selectCollapsedLeafIds", () => {
+  const leafIds = (source: string) => [...selectCollapsedLeafIds(new ModelParser(source).getModels())];
+
+  it("collapses a branded id that 1 interface references", () => {
+    expect(
+      leafIds(`
+        declare const brand: unique symbol;
+        type Brand<T, Name extends string> = T & { readonly [brand]: Name };
+        type EmployeeId = Brand<string, "EmployeeId">;
+        interface Employee { id: EmployeeId }
+      `)
+    ).toEqual(["EmployeeId"]);
+  });
+
+  it("collapses a union of 2 literal strings", () => {
+    expect(leafIds(`type Mode = "dry" | "real";\ninterface Run { mode: Mode }`)).toEqual(["Mode"]);
+  });
+
+  it("does not collapse an interface", () => {
+    expect(leafIds(`interface Id { value: string }\ninterface Employee { id: Id }`)).toEqual([]);
+  });
+
+  it("does not collapse an alias that references another model", () => {
+    expect(
+      leafIds(`
+        type Instant = string;
+        type Stamp = Instant | null;
+        interface Run { at: Stamp }
+      `)
+    ).toEqual(["Instant"]);
+  });
+
+  it("does not collapse a union of object types", () => {
+    expect(
+      leafIds(`
+        type Failure = { readonly kind: "timeout" } | { readonly kind: "dns"; readonly host: string };
+        interface Run { failure: Failure | null }
+      `)
+    ).toEqual([]);
+  });
+
+  it("does not collapse an unreferenced leaf", () => {
+    expect(leafIds(`type Lonely = string;`)).toEqual([]);
   });
 });
 

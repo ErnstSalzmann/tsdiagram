@@ -1,14 +1,16 @@
-import { Edge, Node } from "@xyflow/react";
+import { Edge, Node, NodeChange } from "@xyflow/react";
 import ElkConstructor, { ELK, ElkNode, LayoutOptions } from "elkjs/lib/elk-api";
 import {
   getSchemaFieldModels,
   isArraySchemaField,
+  isDefaultSchemaField,
   isFunctionSchemaField,
   isGenericSchemaField,
   isInlineObjectMember,
   isUnionSchemaField,
   Model,
   TypeAliasModel,
+  TypeTextSegment,
 } from "../../lib/parser/model-types";
 import { EMPTY_BADGE_HUB_IDS } from "./badge-hubs";
 
@@ -25,9 +27,17 @@ const getElk = () => {
 
 export type LayoutDirection = "horizontal" | "vertical";
 export type LayoutPreset = "anchored" | "fresh" | "legacy";
-export type ModelNodeState = Node<{ model: Model; badgeHubIds: ReadonlySet<string> }>;
+export type ModelNodeState = Node<{
+  model: Model;
+  /** The models without a node: badge hubs, collapsed leaves, and models outside the view. */
+  badgeHubIds: ReadonlySet<string>;
+  /** The subset of `badgeHubIds` that renders as inline text instead of a pill. */
+  collapsedLeafIds: ReadonlySet<string>;
+}>;
 /** The boundary that is drawn behind the nodes of one section. It is derived after the layout. */
 export type SectionNodeState = Node<{ title: string }, "section">;
+export const SECTION_NODE_ID_PREFIX = "section:";
+export const isSectionNodeId = (id: string) => id.startsWith(SECTION_NODE_ID_PREFIX);
 export type RendererNodeState = ModelNodeState | SectionNodeState;
 
 export const isModelNode = (node: RendererNodeState): node is ModelNodeState => node.type === "model";
@@ -122,16 +132,54 @@ export const isUnplacedNode = (node: Pick<Node, "position">) =>
 
 export const extractModelNodes = (
   models: Model[],
-  badgeHubIds: ReadonlySet<string> = EMPTY_BADGE_HUB_IDS
+  badgeHubIds: ReadonlySet<string> = EMPTY_BADGE_HUB_IDS,
+  collapsedLeafIds: ReadonlySet<string> = EMPTY_BADGE_HUB_IDS
 ): ModelNodeState[] => {
   return models
     .filter((model) => !badgeHubIds.has(model.id))
     .map((model) => ({
-      data: { model, badgeHubIds },
+      data: { model, badgeHubIds, collapsedLeafIds },
       id: model.id,
       position: UNPLACED_NODE_POSITION,
       type: "model",
     }));
+};
+
+/** Leaf text has only primitives, literals, references, and punctuation. An object type has words. */
+const isLeafText = (segments: TypeTextSegment[] | undefined) =>
+  segments !== undefined &&
+  segments.every((segment) => segment.kind !== "default" || !/[A-Za-z]/.test(segment.text));
+
+/**
+ * A leaf is a type alias with 1 `==>` row that names no other model. A generic
+ * utility such as `Brand<T, Name>` is the exception: `Brand<string, "EmployeeId">`
+ * is a leaf. The row is a primitive, a literal union, or text of those.
+ */
+export const isLeafModel = (model: Model): model is TypeAliasModel => {
+  if (model.type !== "typeAlias" || model.arguments.length > 0 || model.schema.length !== 1) return false;
+  const [row] = model.schema;
+  if (row.name !== "==>") return false;
+  if (!model.dependencies.every((dependency) => dependency.arguments.length > 0)) return false;
+  const texts = isUnionSchemaField(row) ? row.types : isDefaultSchemaField(row) ? [row.type] : [];
+  if (texts.length === 0) return false;
+  return texts.every((text) => typeof text === "string" && isLeafText(model.typeTextSegments[text]));
+};
+
+/** The declared type of a leaf, for example `Brand<string, "EmployeeId">` or `"a" | "b"`. */
+export const describeLeafType = (model: TypeAliasModel): string => {
+  const [row] = model.schema;
+  if (isUnionSchemaField(row))
+    return row.types
+      .map((type) => (typeof type === "string" ? type : isInlineObjectMember(type) ? "{ ... }" : type.name))
+      .join(" | ");
+  return typeof row.type === "string" ? row.type : row.type.name;
+};
+
+/** The leaves that at least 1 other model references. They get no node and no edges. */
+export const selectCollapsedLeafIds = (models: Model[]): Set<string> => {
+  const ids = new Set<string>();
+  for (const model of models) if (isLeafModel(model) && model.dependants.length > 0) ids.add(model.id);
+  return ids;
 };
 
 export const fieldHasSourceEdge = (
@@ -450,9 +498,17 @@ export const getLayoutPreset = (manuallyMovedNodesSet: Set<string>): LayoutPrese
 
 const NO_PINNED_IDS: ReadonlySet<string> = new Set();
 
-/** Room inside a section box: the title needs the top. The drawn boundary uses the same padding. */
+/** The title band of a section box: 8 px from the top, a 16 px line, and 8 px of clearance. */
+const SECTION_TITLE_BAND_PX = 8 + 16 + 8;
+/** Room inside a section box. The drawn boundary uses the same padding as the elk compound node. */
 const SECTION_PAD_PX = 24;
-const SECTION_TITLE_PAD_PX = 40;
+const SECTION_TITLE_PAD_PX = SECTION_TITLE_BAND_PX + 8;
+/** Section boxes sit farther apart than the members inside them, so 2 boxes never touch. */
+const SECTION_SPACING: LayoutOptions = {
+  "elk.layered.spacing.nodeNodeBetweenLayers": "120",
+  "elk.spacing.nodeNode": "96",
+};
+const MEMBER_SPACING_KEYS = ["elk.layered.spacing.nodeNodeBetweenLayers", "elk.spacing.nodeNode"] as const;
 
 export const layoutModelNodes = async ({
   compact,
@@ -466,11 +522,17 @@ export const layoutModelNodes = async ({
 }: LayoutModelNodesArgs): Promise<ModelNodeState[]> => {
   const resolvedPreset = preset ?? getLayoutPreset(manuallyMovedNodesSet);
   // partitions and groups order the whole graph, so the components must share one layout
+  const baseOptions = getLayoutOptions(direction, resolvedPreset);
   const elkOptions: LayoutOptions = {
-    ...getLayoutOptions(direction, resolvedPreset),
+    ...baseOptions,
     ...(partitions ? { "elk.partitioning.activate": "true" } : {}),
-    ...(groups ? { "elk.hierarchyHandling": "INCLUDE_CHILDREN" } : {}),
+    ...(groups ? { "elk.hierarchyHandling": "INCLUDE_CHILDREN", ...SECTION_SPACING } : {}),
     ...(partitions || groups ? { "elk.separateConnectedComponents": "false" } : {}),
+  };
+  // the root spacing applies between sections; the members keep the base spacing
+  const groupLayoutOptions: LayoutOptions = {
+    "elk.padding": `[top=${SECTION_TITLE_PAD_PX},left=${SECTION_PAD_PX},bottom=${SECTION_PAD_PX},right=${SECTION_PAD_PX}]`,
+    ...Object.fromEntries(MEMBER_SPACING_KEYS.map((key) => [key, baseOptions[key]])),
   };
 
   // a pinned node inside a group is pinned relative to the group, so the group
@@ -538,9 +600,7 @@ export const layoutModelNodes = async ({
       children.push({
         children: members,
         id: `group:${groupId}`,
-        layoutOptions: {
-          "elk.padding": `[top=${SECTION_TITLE_PAD_PX},left=${SECTION_PAD_PX},bottom=${SECTION_PAD_PX},right=${SECTION_PAD_PX}]`,
-        },
+        layoutOptions: groupLayoutOptions,
         ...(origin ? { x: origin.x, y: origin.y } : {}),
       });
     }
@@ -638,11 +698,58 @@ export const computeSectionGroups = (models: Model[]): Map<string, string> | nul
   return groups.size > 0 ? groups : null;
 };
 
+/** The member nodes of the section node `sectionNodeId`. */
+export const selectSectionMembers = (nodes: RendererNodeState[], sectionNodeId: string): ModelNodeState[] => {
+  const sectionId = sectionNodeId.slice(SECTION_NODE_ID_PREFIX.length);
+  return nodes.filter(
+    (node): node is ModelNodeState => isModelNode(node) && node.data.model.section?.id === sectionId
+  );
+};
+
+/**
+ * A section node is derived from its members, so a change for it is applied to
+ * them. A position change moves each member by the same delta, so the boundary
+ * keeps its size. Every other change for a section is dropped.
+ */
+export const expandSectionNodeChanges = (
+  changes: NodeChange<RendererNodeState>[],
+  nodes: RendererNodeState[]
+): NodeChange<ModelNodeState>[] => {
+  const result: NodeChange<ModelNodeState>[] = [];
+  for (const change of changes) {
+    if (!("id" in change) || !isSectionNodeId(change.id)) {
+      result.push(change as NodeChange<ModelNodeState>);
+      continue;
+    }
+    if (change.type !== "position" || !change.position) continue;
+    const section = nodes.find((node) => node.id === change.id);
+    if (!section) continue;
+    const dx = change.position.x - section.position.x;
+    const dy = change.position.y - section.position.y;
+    for (const member of selectSectionMembers(nodes, change.id)) {
+      result.push({
+        dragging: change.dragging,
+        id: member.id,
+        position: { x: member.position.x + dx, y: member.position.y + dy },
+        type: "position",
+      });
+    }
+  }
+  return result;
+};
+
+// `elevateNodesOnSelect` adds this to the z-index of a selected node. The boundary stays behind its members.
+const SELECTED_NODE_Z = 1000;
+
 /**
  * One boundary node per section, sized to the placed and measured member
- * nodes plus padding. The boundary takes no pointer events and no layout.
+ * nodes plus padding. The boundary takes no layout. A drag of it moves its
+ * members, see `expandSectionNodeChanges`.
  */
-export const buildSectionNodes = (nodes: ModelNodeState[]): SectionNodeState[] => {
+export const buildSectionNodes = (
+  nodes: ModelNodeState[],
+  selectedSectionNodeIds: ReadonlySet<string> = NO_PINNED_IDS
+): SectionNodeState[] => {
   const boxes = new Map<
     string,
     { title: string; order: number; left: number; top: number; right: number; bottom: number }
@@ -669,19 +776,18 @@ export const buildSectionNodes = (nodes: ModelNodeState[]): SectionNodeState[] =
     .map(([id, box]) => {
       const width = box.right - box.left + SECTION_PAD_PX * 2;
       const height = box.bottom - box.top + SECTION_PAD_PX + SECTION_TITLE_PAD_PX;
+      const selected = selectedSectionNodeIds.has(`${SECTION_NODE_ID_PREFIX}${id}`);
       return {
         connectable: false,
         data: { title: box.title },
-        draggable: false,
-        focusable: false,
         height,
-        id: `section:${id}`,
+        id: `${SECTION_NODE_ID_PREFIX}${id}`,
         measured: { height, width },
         position: { x: box.left - SECTION_PAD_PX, y: box.top - SECTION_TITLE_PAD_PX },
-        selectable: false,
+        selected,
         type: "section",
         width,
-        zIndex: -1,
+        zIndex: selected ? -1 - SELECTED_NODE_Z : -1,
       };
     });
 };
