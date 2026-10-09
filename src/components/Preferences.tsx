@@ -50,6 +50,13 @@ export const Preferences = ({ isOpen, onClose }: PreferencesProps) => {
     optionsStore.state.save();
   };
 
+  const handleViewChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    // re-enable auto-fit so the relayout this triggers is brought into view
+    optionsStore.state.renderer.autoFitView = true;
+    optionsStore.state.renderer.view = event.target.value as "all" | "functions";
+    optionsStore.state.save();
+  };
+
   const handlePanelSplitDirectionChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     optionsStore.state.panels.splitDirection = event.target.value as "horizontal" | "vertical";
     optionsStore.state.save();
@@ -139,6 +146,21 @@ export const Preferences = ({ isOpen, onClose }: PreferencesProps) => {
                   </div>
 
                   <div className="flex flex-col gap-2 border-t border-dashed border-border pt-4">
+                    <div className="field-group">
+                      <label className="field-label" htmlFor="renderer-view">
+                        View
+                      </label>
+                      <select
+                        className="field-control"
+                        id="renderer-view"
+                        value={options.renderer.view}
+                        onChange={handleViewChange}
+                      >
+                        <option value="all">All models</option>
+                        <option value="functions">Functions and their types</option>
+                      </select>
+                    </div>
+
                     {!isMobile && (
                       <div className="check-row">
                         <input

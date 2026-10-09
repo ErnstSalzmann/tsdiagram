@@ -41,6 +41,7 @@ import { arePortColorsEqual, assignEdgeColors, EDGE_COLOR_PALETTES, EMPTY_PORT_C
 import { EdgeRoutingProvider } from "./EdgeRoutingProvider";
 import {
   buildSectionNodes,
+  computeFunctionPartitions,
   computeSectionGroups,
   decorateModelEdges,
   extractModelEdges,
@@ -54,6 +55,7 @@ import {
   ModelNodeState,
   normalizeLayoutEdges,
   RendererNodeState,
+  selectFunctionsView,
   shouldResetLayoutAnchors,
 } from "./layout";
 import { ModelNode } from "./ModelNode";
@@ -111,7 +113,7 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
   const previousBadgeHubIdsRef = useRef<{ documentId: string; ids: ReadonlySet<string> } | undefined>(
     undefined
   );
-  const badgeHubIds = useMemo(() => {
+  const hubIds = useMemo(() => {
     const previousBadgeHubIds =
       previousBadgeHubIdsRef.current?.documentId === documentId
         ? previousBadgeHubIdsRef.current.ids
@@ -119,8 +121,16 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     return options.renderer.badgeHubs ? computeBadgeHubIds(models, previousBadgeHubIds) : EMPTY_BADGE_HUB_IDS;
   }, [documentId, models, options.renderer.badgeHubs]);
   useEffect(() => {
-    previousBadgeHubIdsRef.current = { documentId, ids: badgeHubIds };
-  }, [badgeHubIds, documentId]);
+    previousBadgeHubIdsRef.current = { documentId, ids: hubIds };
+  }, [hubIds, documentId]);
+  // a model outside the view is treated like a badge hub: no node, no edges, and
+  // a pill where a visible node refers to it
+  const isFunctionsView = options.renderer.view === "functions";
+  const badgeHubIds = useMemo(() => {
+    if (!isFunctionsView) return hubIds;
+    const visible = new Set(selectFunctionsView(models));
+    return new Set([...hubIds, ...models.filter((model) => !visible.has(model)).map((model) => model.id)]);
+  }, [hubIds, isFunctionsView, models]);
   const panelRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAnimate, setShouldAnimate] = useState(false);
@@ -160,9 +170,14 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
 
   const parsedNodes = useMemo(() => extractModelNodes(models, badgeHubIds), [models, badgeHubIds]);
   const modelEdges = useMemo(() => extractModelEdges(models, badgeHubIds), [models, badgeHubIds]);
+  // the functions view orders the functions along the main axis instead of grouping by section
   const sectionGroups = useMemo(
-    () => (options.renderer.sections ? computeSectionGroups(models) : null),
-    [models, options.renderer.sections]
+    () => (options.renderer.sections && !isFunctionsView ? computeSectionGroups(models) : null),
+    [isFunctionsView, models, options.renderer.sections]
+  );
+  const partitions = useMemo(
+    () => (isFunctionsView ? computeFunctionPartitions(models) : null),
+    [isFunctionsView, models]
   );
   useEffect(() => {
     const { hoveredNode, selectedNode } = graphStore.state;
@@ -259,6 +274,7 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
           manuallyMovedNodesSet: manuallyMovedNodesSet.current,
           groups: sectionGroups,
           nodes: currentNodes,
+          partitions,
         })
           .then((layoutedNodes) => {
             if (currentRunId !== autoLayoutRunId.current) return;
@@ -292,6 +308,7 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     options.renderer.autoFitView,
     options.renderer.compactLayout,
     options.renderer.direction,
+    partitions,
     sectionGroups,
     setNodes,
   ]);
@@ -307,7 +324,7 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     };
   }, [handleAutoLayout]);
 
-  const layoutOptionsKey = `${options.renderer.compactLayout}|${options.renderer.sections}`;
+  const layoutOptionsKey = `${options.renderer.compactLayout}|${options.renderer.sections}|${options.renderer.view}`;
   const previousLayoutOptionsKeyRef = useRef(layoutOptionsKey);
   useEffect(() => {
     if (previousLayoutOptionsKeyRef.current === layoutOptionsKey) return;

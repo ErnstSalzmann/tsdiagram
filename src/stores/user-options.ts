@@ -20,6 +20,7 @@ const userOptionsSchema = z.object({
     compactLayout: z.boolean().default(true),
     colorizeEdges: z.boolean().default(true),
     sections: z.boolean().default(true),
+    view: z.enum(["all", "functions"]).default("all"),
   }),
 });
 
@@ -46,6 +47,7 @@ export const optionsStore = createStore<UserOptions>({
     compactLayout: true,
     colorizeEdges: true,
     sections: true,
+    view: "all",
   },
   load() {
     try {

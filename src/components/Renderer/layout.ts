@@ -631,6 +631,36 @@ export const layoutModelNodes = async ({
   return layoutedNodes.map((node) => compacted.get(node.id) ?? node);
 };
 
+/**
+ * The functions view: the functions and the models that their signatures
+ * reference directly. A function's dependencies are its parameter types, its
+ * return type, and the type arguments of those.
+ */
+export const selectFunctionsView = (models: Model[]): Model[] => {
+  const visible = new Set<Model>();
+  for (const model of models) {
+    if (model.type !== "function") continue;
+    visible.add(model);
+    for (const dependency of model.dependencies) visible.add(dependency);
+  }
+  return models.filter((model) => visible.has(model));
+};
+
+/** The source order of each function as its partition. A type joins the first function that uses it. */
+export const computeFunctionPartitions = (models: Model[]): Map<string, number> => {
+  const partitions = new Map<string, number>();
+  let order = 0;
+  for (const model of models) {
+    if (model.type !== "function") continue;
+    partitions.set(model.id, order);
+    for (const dependency of model.dependencies) {
+      if (!partitions.has(dependency.id)) partitions.set(dependency.id, order);
+    }
+    order += 1;
+  }
+  return partitions;
+};
+
 /** The section id per model id, or null when no model has a section. */
 export const computeSectionGroups = (models: Model[]): Map<string, string> | null => {
   const groups = new Map<string, string>();

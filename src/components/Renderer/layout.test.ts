@@ -3,9 +3,11 @@ import { ModelParser } from "../../lib/parser/ModelParser";
 import {
   buildSectionNodes,
   compactLayoutedNodes,
+  computeFunctionPartitions,
   extractModelEdges,
   fieldHasSourceEdge,
   ModelNodeState,
+  selectFunctionsView,
 } from "./layout";
 
 const NO_PINS: ReadonlySet<string> = new Set();
@@ -257,5 +259,37 @@ describe("buildSectionNodes", () => {
     expect(boundary.position).toEqual({ x: 76, y: 60 });
     expect(boundary.width).toBe(448);
     expect(boundary.height).toBe(364);
+  });
+});
+
+describe("selectFunctionsView", () => {
+  const models = new ModelParser(`
+    interface Input { id: string }
+    interface Output { ok: boolean }
+    interface Failure { code: number }
+    type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
+    interface Unrelated { name: string }
+    declare function run(input: Input): Result<Output, Failure>;
+  `).getModels();
+
+  it("keeps a function, its parameter type, its return type, and the arguments of a generic return type", () => {
+    expect(selectFunctionsView(models).map((model) => model.name)).toEqual([
+      "Input",
+      "Output",
+      "Failure",
+      "Result",
+      "run",
+    ]);
+  });
+
+  it("gives each function its source order and a type the order of its first user", () => {
+    const partitions = computeFunctionPartitions([
+      ...models,
+      ...new ModelParser("declare function later(input: { id: string }): void;").getModels(),
+    ]);
+    expect(partitions.get("run")).toBe(0);
+    expect(partitions.get("Result")).toBe(0);
+    expect(partitions.get("later")).toBe(1);
+    expect(partitions.has("Unrelated")).toBe(false);
   });
 });
