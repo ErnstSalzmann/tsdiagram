@@ -2,6 +2,7 @@ import { Fragment, memo, ReactNode, useEffect, useId, useMemo, useRef } from "re
 import { Handle, Position, useUpdateNodeInternals } from "@xyflow/react";
 import classNames from "classnames";
 import {
+  FunctionSchemaField,
   InlineObjectMember,
   isArraySchemaField,
   isFunctionSchemaField,
@@ -149,14 +150,21 @@ const Separated = ({ items, separator }: { items: ReactNode[]; separator: ReactN
   </>
 );
 
-const FieldKey = ({ context, field }: { context: FieldContext; field: SchemaField }) => (
+const FieldKey = ({ field }: { field: SchemaField }) => (
   <>
     {field.modifiers && field.modifiers.length > 0 && <Muted>{`${field.modifiers.join(" ")} `}</Muted>}
     {isFunctionSchemaField(field) && field.accessor && <Muted>{field.accessor} </Muted>}
     <span className={field.inherited ? MODEL_NODE_CLASSES.field.inheritedName : undefined}>{field.name}</span>
     {field.optional && <Muted>?</Muted>}
-    {isFunctionSchemaField(field) && (
-      <>
+  </>
+);
+
+/** The parameters above the return type, with a divider between the 2 lines. */
+const FunctionStack = ({ context, field }: { context: FieldContext; field: FunctionSchemaField }) => {
+  const returnType = Array.isArray(field.returnType) ? field.returnType[0] : field.returnType;
+  return (
+    <div className="flex flex-col">
+      <div>
         <Muted>(</Muted>
         <Separated
           items={field.arguments.map((argument) => (
@@ -169,10 +177,15 @@ const FieldKey = ({ context, field }: { context: FieldContext; field: SchemaFiel
           separator={<Muted>, </Muted>}
         />
         <Muted>)</Muted>
-      </>
-    )}
-  </>
-);
+      </div>
+      <div className="border-t border-divider">
+        {field.returnTypeReadonly && <Muted>readonly </Muted>}
+        <TypeValue context={context} value={returnType} />
+        {Array.isArray(field.returnType) && <Muted>[]</Muted>}
+      </div>
+    </div>
+  );
+};
 
 const NestedObject = ({ context, members }: { context: FieldContext; members: SchemaField[] }) => (
   <div className={MODEL_NODE_CLASSES.nested.root}>
@@ -214,10 +227,7 @@ const UnionWithObjects = ({ context, field }: { context: FieldContext; field: Un
 };
 
 const FieldType = ({ context, field }: { context: FieldContext; field: SchemaField }) => {
-  const isReadonlyArray =
-    (isArraySchemaField(field) && field.readonly) ||
-    (isFunctionSchemaField(field) && field.returnTypeReadonly);
-  const readonlyPrefix = isReadonlyArray && <Muted>readonly </Muted>;
+  const readonlyPrefix = isArraySchemaField(field) && field.readonly && <Muted>readonly </Muted>;
 
   if (isModelReference(field.type)) {
     return <TypeNameSpan badgeHubIds={context.badgeHubIds} refModel={field.type} />;
@@ -250,18 +260,7 @@ const FieldType = ({ context, field }: { context: FieldContext; field: SchemaFie
       </Muted>
     );
   }
-  if (isFunctionSchemaField(field)) {
-    if (Array.isArray(field.returnType)) {
-      return (
-        <Muted>
-          {readonlyPrefix}
-          <TypeValue context={context} value={field.returnType[0]} />
-          []
-        </Muted>
-      );
-    }
-    return <TypeValue context={context} value={field.returnType} />;
-  }
+  if (isFunctionSchemaField(field)) return <FunctionStack context={context} field={field} />;
   if (isUnionSchemaField(field)) {
     if (field.types.some(isInlineObjectMember)) return <UnionWithObjects context={context} field={field} />;
     const types = field.types.filter(isTextOrModel);
@@ -300,19 +299,31 @@ const FieldRow = ({
 }) => {
   const cells = nested ? MODEL_NODE_CLASSES.nested : MODEL_NODE_CLASSES.field;
   const portId = `${context.model.id}-source-${field.name}`;
+  // a signature without a name, such as the row of a `ƒ` node, fills the whole row
+  const fillsRow = isFunctionSchemaField(field) && field.name === "";
+  const sourceHandle = handle && (
+    <Handle id={portId} position={Position.Right} type="source">
+      <SourcePort portId={portId} />
+    </Handle>
+  );
   return (
     <tr className={MODEL_NODE_CLASSES.field.root} data-inherited={field.inherited}>
-      <td className={cells.keyCell}>
-        <FieldKey context={context} field={field} />
-      </td>
-      <td align="right" className={cells.typeCell}>
-        <FieldType context={context} field={field} />
-        {handle && (
-          <Handle id={portId} position={Position.Right} type="source">
-            <SourcePort portId={portId} />
-          </Handle>
-        )}
-      </td>
+      {fillsRow ? (
+        <td className={classNames(cells.typeCell, "pl-2 text-left")} colSpan={2}>
+          <FieldType context={context} field={field} />
+          {sourceHandle}
+        </td>
+      ) : (
+        <>
+          <td className={cells.keyCell}>
+            <FieldKey field={field} />
+          </td>
+          <td align="right" className={cells.typeCell}>
+            <FieldType context={context} field={field} />
+            {sourceHandle}
+          </td>
+        </>
+      )}
     </tr>
   );
 };
