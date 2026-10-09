@@ -76,7 +76,7 @@ const edgeTypes = { custom: CustomEdge };
 const proOptions = { hideAttribution: true };
 // a section boundary is a node too; filled, it would cover its members in the minimap
 const minimapNodeColor = (node: { type?: string }) =>
-  node.type === "section" ? "transparent" : "var(--color-border-strong)";
+  node.type === "section" ? "transparent" : "var(--color-brand)";
 const minimapNodeStrokeColor = (node: { type?: string }) =>
   node.type === "section" ? "var(--color-border)" : "transparent";
 
