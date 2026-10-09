@@ -295,7 +295,7 @@ const UnionWithObjects = ({ context, field }: { context: FieldContext; field: Un
         const header = tag && isDefaultSchemaField(tag) && (
           <span>
             <span className="opacity-70">{tag.name}: </span>
-            <TypeValue context={context} value={tag.type} />
+            {String(tag.type)}
           </span>
         );
         return <NestedObject key={index} context={context} header={header} members={members} />;
