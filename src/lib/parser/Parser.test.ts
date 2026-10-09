@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { SyntaxKind } from "ts-morph";
 import { Parser } from "./Parser";
 
 it("parses code into AST and updates it on code change", () => {
@@ -143,7 +144,9 @@ it("parses functions, groups overloads, and reads namespaces", () => {
   const functions = parser.functions;
   expect(functions.map((f) => f.name)).toEqual(["a", "b", "N.c"]);
   expect(functions[1].signatures).toHaveLength(2);
-  expect(functions[1].signatures.every((s) => !s.hasBody())).toBe(true);
+  expect(functions[1].signatures.every((s) => s.isKind(SyntaxKind.FunctionDeclaration) && !s.hasBody())).toBe(
+    true
+  );
   expect(functions[2].signatures).toHaveLength(1);
 });
 

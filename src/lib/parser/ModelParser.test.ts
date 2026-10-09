@@ -3323,3 +3323,28 @@ it("keeps a flattened alias union as text when the member has no type node", () 
 
   expect(actorBox?.schema[0]).toMatchObject({ name: "value", type: "Actor | null", inherited: true });
 });
+
+it("draws a named function type as a function, not as a type alias", () => {
+  const parser = new ModelParser(`
+    interface Data { rows: number }
+    interface Plan { actions: string[] }
+    export type Diff = (data: Data, dry: boolean) => Plan;
+    export type Mapper<T extends object> = (value: T) => readonly T[];
+    export type Flag = boolean;
+  `);
+
+  const models = parser.getModels();
+  const diff = models.find((m) => m.name === "Diff");
+  const mapper = models.find((m) => m.name === "Mapper");
+  expect(diff?.type).toBe("function");
+  expect(diff?.schema).toHaveLength(1);
+  const [row] = diff!.schema;
+  if (!isFunctionSchemaField(row)) throw new Error("expected a function row");
+  expect(row.arguments.map((argument) => argument.name)).toEqual(["data", "dry"]);
+  expect(row.returnType).toBe(models.find((m) => m.name === "Plan"));
+  expect(diff?.dependencies.map((m) => m.name).sort()).toEqual(["Data", "Plan"]);
+  expect(mapper?.type).toBe("function");
+  expect(mapper?.arguments).toEqual([{ name: "T", extends: "object" }]);
+  expect(models.find((m) => m.name === "Flag")?.type).toBe("typeAlias");
+  expect(models.filter((m) => m.name === "Diff")).toHaveLength(1);
+});

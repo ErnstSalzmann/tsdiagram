@@ -6,6 +6,7 @@ import {
   EnumMember,
   ExpressionWithTypeArguments,
   FunctionDeclaration,
+  FunctionTypeNode,
   GetAccessorDeclaration,
   IndexSignatureDeclaration,
   InterfaceDeclaration,
@@ -63,11 +64,19 @@ export type ParsedClass = {
 export type ParsedFunction = {
   name: string;
   section?: Section;
-  /** The first declaration. Closures that need a location use it. */
-  declaration: FunctionDeclaration;
-  /** The signatures to show: the overloads without a body, or the implementation when it is the only declaration. */
-  signatures: FunctionDeclaration[];
+  /** The first declaration, or the alias for a named function type. Closures that need a location use it. */
+  declaration: FunctionDeclaration | TypeAliasDeclaration;
+  /**
+   * The signatures to show: the overloads without a body, or the
+   * implementation when it is the only declaration, or the function type of
+   * an alias like `type Diff = (data: Data) => Plan`.
+   */
+  signatures: (FunctionDeclaration | FunctionTypeNode)[];
 };
+
+/** A type alias whose declared type is 1 function type. It is a named signature, so it draws as a function. */
+const isFunctionTypeAlias = (declaration: TypeAliasDeclaration) =>
+  declaration.getTypeNode()?.isKind(SyntaxKind.FunctionType) ?? false;
 
 export type ParsedEnum = {
   name: string;
@@ -387,8 +396,24 @@ export class Parser {
     }
 
     for (const item of result.values()) {
-      const overloads = item.signatures.filter((signature) => !signature.hasBody());
+      const overloads = item.signatures.filter(
+        (signature) => !signature.isKind(SyntaxKind.FunctionDeclaration) || !signature.hasBody()
+      );
       if (overloads.length > 0) item.signatures = overloads;
+    }
+
+    // a named function type is a signature too, in the functional style
+    const aliases = collectQualifiedDeclarations(
+      this.source.getTypeAliases(),
+      this.source.getModules(),
+      (module) => module.getTypeAliases()
+    );
+    for (const { moduleName, declaration } of aliases) {
+      const typeNode = declaration.getTypeNode();
+      if (!typeNode || !typeNode.isKind(SyntaxKind.FunctionType)) continue;
+      const name = moduleName ? `${moduleName}.${declaration.getName()}` : declaration.getName();
+      if (result.has(name)) continue;
+      result.set(name, { name, section: this.sectionOf(declaration), declaration, signatures: [typeNode] });
     }
 
     return Array.from(result.values());
@@ -403,6 +428,8 @@ export class Parser {
     );
 
     for (const { declaration, moduleName } of declarations) {
+      // a function type alias is listed by `functions` instead
+      if (isFunctionTypeAlias(declaration)) continue;
       const name = moduleName ? `${moduleName}.${declaration.getName()}` : declaration.getName();
       const type = declaration.getType();
 
