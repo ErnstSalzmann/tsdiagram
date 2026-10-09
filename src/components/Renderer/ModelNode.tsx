@@ -189,14 +189,60 @@ const Separated = ({ items, separator }: { items: ReactNode[]; separator: ReactN
   </>
 );
 
-const FieldKey = ({ field }: { field: SchemaField }) => (
+/** The parameters of a call. Up to 2 stay on the line; more go 1 per line, indented. */
+const Parameters = ({ context, field }: { context: FieldContext; field: FunctionSchemaField }) => {
+  const items = field.arguments.map((argument) => (
+    <span key={argument.name}>
+      {argument.name}
+      <Muted>: </Muted>
+      <TypeValue context={context} value={argument.type} />
+    </span>
+  ));
+  if (items.length <= 2) {
+    return (
+      <Muted>
+        (<Separated items={items} separator={<Muted>, </Muted>} />)
+      </Muted>
+    );
+  }
+  return (
+    <Muted>
+      (
+      <span className="block pl-3 text-text">
+        {items.map((item, index) => (
+          <span key={index} className="block">
+            {item}
+            {index < items.length - 1 && <Muted>,</Muted>}
+          </span>
+        ))}
+      </span>
+      )
+    </Muted>
+  );
+};
+
+/** The name of a row. A method carries its call, `open()` or `fetch(a: A, b: B)`, because the brackets belong to the name. */
+const FieldKey = ({ context, field }: { context: FieldContext; field: SchemaField }) => (
   <>
     {field.modifiers && field.modifiers.length > 0 && <Muted>{`${field.modifiers.join(" ")} `}</Muted>}
     {isFunctionSchemaField(field) && field.accessor && <Muted>{field.accessor} </Muted>}
     <span className={field.inherited ? MODEL_NODE_CLASSES.field.inheritedName : undefined}>{field.name}</span>
     {field.optional && <Muted>?</Muted>}
+    {isFunctionSchemaField(field) && <Parameters context={context} field={field} />}
   </>
 );
+
+/** The return type of a call, for the type column of a named method. */
+const FunctionReturn = ({ context, field }: { context: FieldContext; field: FunctionSchemaField }) => {
+  const returnType = Array.isArray(field.returnType) ? field.returnType[0] : field.returnType;
+  return (
+    <>
+      {field.returnTypeReadonly && <Muted>readonly </Muted>}
+      <TypeValue context={context} value={returnType} />
+      {Array.isArray(field.returnType) && <Muted>[]</Muted>}
+    </>
+  );
+};
 
 /** The parameters above the return type, with a divider between the 2 lines. */
 const FunctionStack = ({ context, field }: { context: FieldContext; field: FunctionSchemaField }) => {
@@ -359,7 +405,10 @@ const FieldType = ({ context, field }: { context: FieldContext; field: SchemaFie
       </Muted>
     );
   }
-  if (isFunctionSchemaField(field)) return <FunctionStack context={context} field={field} />;
+  if (isFunctionSchemaField(field)) {
+    if (field.name !== "") return <FunctionReturn context={context} field={field} />;
+    return <FunctionStack context={context} field={field} />;
+  }
   if (isUnionSchemaField(field)) {
     if (field.types.some(isInlineObjectMember)) return <UnionWithObjects context={context} field={field} />;
     const types = field.types.filter(isTextOrModel);
@@ -416,8 +465,8 @@ const FieldRow = ({
         </td>
       ) : (
         <>
-          <td className={cells.keyCell}>
-            <FieldKey field={field} />
+          <td className={classNames(cells.keyCell, "whitespace-normal")}>
+            <FieldKey context={context} field={field} />
           </td>
           <td align="right" className={cells.typeCell}>
             <FieldType context={context} field={field} />
