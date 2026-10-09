@@ -1,18 +1,24 @@
 import {
+  InlineObjectMember,
   isArraySchemaField,
   isFunctionSchemaField,
   isGenericSchemaField,
+  isInlineObjectMember,
+  isObjectSchemaField,
   isUnionSchemaField,
   Model,
+  SchemaField,
 } from "../../lib/parser/model-types";
 
-type SchemaField = Model["schema"][number];
+type SchemaFieldToken = Record<string, unknown>;
 
-const refToken = (value: Model | string): string => {
-  return typeof value === "string" ? value : `@${value.id}`;
+const refToken = (value: InlineObjectMember | Model | string): SchemaFieldToken | string => {
+  if (typeof value === "string") return value;
+  if (isInlineObjectMember(value)) return { kind: "object", members: value.members.map(schemaFieldToken) };
+  return `@${value.id}`;
 };
 
-const schemaFieldToken = (field: SchemaField) => {
+const schemaFieldToken = (field: SchemaField): SchemaFieldToken => {
   const shared = {
     name: field.name,
     optional: field.optional,
@@ -45,6 +51,14 @@ const schemaFieldToken = (field: SchemaField) => {
   }
   if (isUnionSchemaField(field)) {
     return { ...shared, kind: "union", types: field.types.map(refToken) };
+  }
+  if (isObjectSchemaField(field)) {
+    return {
+      ...shared,
+      kind: "object",
+      members: field.members.map(schemaFieldToken),
+      nullable: field.nullable,
+    };
   }
   return { ...shared, kind: "default", type: refToken(field.type) };
 };

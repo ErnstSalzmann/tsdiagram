@@ -1,5 +1,12 @@
 import { expect, it } from "vitest";
-import { isDefaultSchemaField, isFunctionSchemaField, ModelParser } from "./ModelParser";
+import {
+  isDefaultSchemaField,
+  isFunctionSchemaField,
+  isInlineObjectMember,
+  isObjectSchemaField,
+  isUnionSchemaField,
+  ModelParser,
+} from "./ModelParser";
 
 it.each([
   {
@@ -1379,7 +1386,9 @@ it.each([
   const field = models.find((model) => model.name === "Result")?.schema[0];
   if (!field || !("types" in field)) throw new Error("expected union field");
 
-  expect(field.types.map((type) => (typeof type === "string" ? type : type.name))).toEqual(expectedNames);
+  expect(
+    field.types.map((type) => (typeof type === "string" ? type : "name" in type ? type.name : type.kind))
+  ).toEqual(expectedNames);
 });
 
 it("retains distinct alias union members with identical rendered text", () => {
@@ -1387,11 +1396,12 @@ it("retains distinct alias union members with identical rendered text", () => {
     type Result = { value: string } | { value: string } | null;
   `).getModels();
 
+  const value = { name: "value", type: "string", optional: false };
   expect(model.schema).toEqual([
     {
       name: "==>",
       type: "union",
-      types: ["{ value: string; }", "{ value: string; }", "null"],
+      types: [{ kind: "object", members: [value] }, { kind: "object", members: [value] }, "null"],
       optional: false,
     },
   ]);
@@ -3176,4 +3186,140 @@ it("carries the section of a declaration on its model", () => {
   expect(byName.get("Loose")?.section).toBeUndefined();
   expect(byName.get("A")?.section).toEqual({ id: "section-0", title: "Core", order: 0 });
   expect(byName.get("run")?.section?.id).toBe("section-0");
+});
+
+it("parses an inline object field as an object field with its members", () => {
+  const models = new ModelParser(`
+    type ExternalId = string;
+    interface Link { link: { readonly externalId: ExternalId; roles: readonly ExternalId[] } }
+  `).getModels();
+  const link = models.find((model) => model.name === "Link");
+  const field = link?.schema[0];
+
+  if (!field || !isObjectSchemaField(field)) throw new Error("expected an object field");
+  expect(field.nullable).toBe(false);
+  expect(field.members).toHaveLength(2);
+  expect(field.members[0]).toMatchObject({ name: "externalId", modifiers: ["readonly"] });
+  expect(field.members[1]).toMatchObject({ name: "roles", type: "array", readonly: true });
+  expect(field.typeRefs?.map((model) => model.name)).toEqual(["ExternalId"]);
+  expect(link?.dependencies.map((model) => model.name)).toEqual(["ExternalId"]);
+});
+
+it("sets nullable when null is in the union with 1 object literal", () => {
+  const [model] = new ModelParser(`
+    interface State { current: { id: string } | null }
+  `).getModels();
+  const field = model.schema[0];
+
+  if (!isObjectSchemaField(field)) throw new Error("expected an object field");
+  expect(field.nullable).toBe(true);
+  expect(field.members).toEqual([{ name: "id", type: "string", optional: false }]);
+});
+
+it("parses a union of 2 object literals as a union field with object members and their kind literal", () => {
+  const models = new ModelParser(`
+    type Actor = { readonly userId: string };
+    type Event =
+      | { readonly kind: "connected"; readonly by: Actor }
+      | { readonly kind: "paused"; readonly by: Actor; readonly reason: string | null };
+  `).getModels();
+  const event = models.find((model) => model.name === "Event");
+  const field = event?.schema[0];
+
+  if (!field || !isUnionSchemaField(field)) throw new Error("expected a union field");
+  expect(field.types).toHaveLength(2);
+  const [first, second] = field.types;
+  if (!isInlineObjectMember(first) || !isInlineObjectMember(second)) throw new Error("expected objects");
+  expect(first.members[0]).toMatchObject({ name: "kind", type: '"connected"', modifiers: ["readonly"] });
+  expect(second.members[0]).toMatchObject({ name: "kind", type: '"paused"' });
+  expect(second.members[2]).toMatchObject({ name: "reason", type: "string | null" });
+  expect(first.members[1].type).toBe(models.find((model) => model.name === "Actor"));
+  expect(field.typeRefs?.map((model) => model.name)).toEqual(["Actor"]);
+  expect(event?.typeTextSegments['"connected"']).toEqual([{ text: '"connected"', kind: "literal" }]);
+});
+
+it("keeps a model member of a mixed union as a reference beside the inline object", () => {
+  const models = new ModelParser(`
+    interface Outcome { ok: boolean }
+    interface Error { code: number }
+    interface Row { outcome: Outcome | { kind: "failed"; error: Error } }
+  `).getModels();
+  const row = models.find((model) => model.name === "Row");
+  const field = row?.schema[0];
+
+  if (!field || !isUnionSchemaField(field)) throw new Error("expected a union field");
+  expect(field.types.map((type) => (isInlineObjectMember(type) ? "object" : typeof type))).toEqual([
+    "object",
+    "object",
+  ]);
+  expect(field.types[1]).toBe(models.find((model) => model.name === "Outcome"));
+  expect(field.typeRefs?.map((model) => model.name)).toEqual(["Error"]);
+});
+
+it("nests object literals 2 levels deep", () => {
+  const [model] = new ModelParser(`
+    interface Config { limits: { locations: { max: number | null; soft: boolean }; employees: number } }
+  `).getModels();
+  const field = model.schema[0];
+
+  if (!isObjectSchemaField(field)) throw new Error("expected an object field");
+  const [locations, employees] = field.members;
+  if (!isObjectSchemaField(locations)) throw new Error("expected a nested object field");
+  expect(locations.members.map((member) => member.name)).toEqual(["max", "soft"]);
+  expect(locations.members[0]).toMatchObject({ type: "number | null" });
+  expect(employees).toEqual({ name: "employees", type: "number", optional: false });
+  expect(model.typeTextSegments["number | null"]).toBeDefined();
+});
+
+it("renders an object literal deeper than the depth limit as text", () => {
+  const [model] = new ModelParser(`
+    interface Deep { a: { b: { c: { d: { e: { f: string } } } } } }
+  `).getModels();
+  let field = model.schema[0];
+  for (const name of ["a", "b", "c", "d"]) {
+    if (!isObjectSchemaField(field)) throw new Error(`expected ${name} to be an object field`);
+    expect(field.name).toBe(name);
+    field = field.members[0];
+  }
+  expect(field).toEqual({ name: "e", type: "{ f: string; }", optional: false });
+});
+
+it("keeps the object keyword, aliases, and arrays of literals as text or array fields", () => {
+  const [model] = new ModelParser(`
+    type Named = { name: string };
+    interface Mixed { plain: object; named: Named; list: { id: string }[] }
+  `).getModels();
+  const [plain, named, list] = model.schema;
+
+  expect(plain).toEqual({ name: "plain", type: "object", optional: false });
+  expect(isObjectSchemaField(plain)).toBe(false);
+  expect(named.type).toMatchObject({ name: "Named" });
+  expect(list).toMatchObject({ type: "array", elementType: "{ id: string; }" });
+});
+
+it("keeps an aliased union of object literals as a reference inside an inline object", () => {
+  const models = new ModelParser(`
+    type Actor = { readonly kind: "manager"; readonly userId: string } | { readonly kind: "system" };
+    type Event = { readonly kind: "connected"; readonly by: Actor; readonly previous: Actor | null };
+    interface Row { actor: Actor | null; event: Event["kind"] | Actor }
+  `).getModels();
+  const actor = models.find((model) => model.name === "Actor");
+  const event = models.find((model) => model.name === "Event");
+  const row = models.find((model) => model.name === "Row");
+
+  expect(event?.schema[1]).toMatchObject({ name: "by", type: actor });
+  expect(event?.schema[2]).toMatchObject({ name: "previous", type: "Actor | null", typeRefs: [actor] });
+  expect(row?.schema[0]).toMatchObject({ name: "actor", type: "Actor | null", typeRefs: [actor] });
+  expect(row?.schema[1]).toMatchObject({ name: "event", type: 'Actor | "connected"' });
+});
+
+it("keeps a flattened alias union as text when the member has no type node", () => {
+  const models = new ModelParser(`
+    type Actor = { readonly kind: "manager" } | { readonly kind: "system" };
+    interface Box<T> { value: T }
+    interface ActorBox extends Box<Actor | null> {}
+  `).getModels();
+  const actorBox = models.find((model) => model.name === "ActorBox");
+
+  expect(actorBox?.schema[0]).toMatchObject({ name: "value", type: "Actor | null", inherited: true });
 });

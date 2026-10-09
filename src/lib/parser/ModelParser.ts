@@ -27,15 +27,21 @@ import {
   FunctionModel,
   EnumModel,
   GenericSchemaField,
+  getSchemaFieldModels,
+  InlineObjectMember,
   InterfaceModel,
   isArraySchemaField,
   isFunctionSchemaField,
   isGenericSchemaField,
+  isInlineObjectMember,
+  isObjectSchemaField,
   isUnionSchemaField,
   Model,
+  SchemaField,
   SchemaFieldModifier,
   TypeAliasModel,
   TypeTextSegment,
+  UnionSchemaField,
 } from "./model-types";
 
 import { ParsedClass, ParsedFunction, ParsedInterface, ParsedTypeAlias, Parser } from "./Parser";
@@ -249,6 +255,29 @@ const classifyTypeText = (text: string) => {
   }
   if (cursor < text.length) segments.push({ text: text.slice(cursor), kind: "default" });
   return segments;
+};
+
+/** Object literals nest as boxes up to this depth. Deeper literals render as text. */
+const MAX_INLINE_OBJECT_DEPTH = 4;
+
+const isPropNode = (node: Node): node is Exclude<Prop, SynthesizedProperty> =>
+  Node.isPropertySignature(node) ||
+  Node.isPropertyDeclaration(node) ||
+  Node.isMethodSignature(node) ||
+  Node.isMethodDeclaration(node) ||
+  Node.isGetAccessorDeclaration(node) ||
+  Node.isSetAccessorDeclaration(node);
+
+/**
+ * An object literal type that is not an alias, not callable, and not a `typeof` query.
+ * The type checker keeps the `TypeLiteral` declaration on instantiated literals too.
+ */
+const isObjectLiteralType = (type: Type) => {
+  if (!type.isObject() || !type.isAnonymous() || type.getAliasSymbol()) return false;
+  if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0) return false;
+  if (type.getProperties().length === 0) return false;
+  const declarations = type.getSymbol()?.getDeclarations() ?? [];
+  return declarations.every(Node.isTypeLiteral);
 };
 
 const isPrimitiveLikeType = (type: Type) =>
@@ -681,6 +710,46 @@ export class ModelParser extends Parser {
         return refs;
       };
 
+      // the add* functions push into the schema of the model, or into the members of the
+      // inline object that is under construction
+      let schemaTarget: SchemaField[] = model.schema;
+      let inlineObjectDepth = 0;
+
+      const isInlineObjectType = (type: Type) =>
+        inlineObjectDepth < MAX_INLINE_OBJECT_DEPTH && isObjectLiteralType(type);
+
+      const buildInlineObjectMembers = (type: Type, typeLocation: Node): SchemaField[] => {
+        const members: SchemaField[] = [];
+        const previousTarget = schemaTarget;
+        schemaTarget = members;
+        inlineObjectDepth++;
+        try {
+          for (const symbol of type.getProperties()) {
+            const memberType = this.checker.getTypeOfSymbolAtLocation(symbol, typeLocation);
+            const declaration = symbol.getValueDeclaration();
+            const prop =
+              declaration && isPropNode(declaration)
+                ? declaration
+                : createSynthesizedProperty(symbol, memberType, typeLocation);
+            if (
+              !addFunctionProp(prop, memberType) &&
+              !addArrayProp(prop, memberType) &&
+              !addGenericProp(prop, memberType)
+            ) {
+              addDefaultProp(prop, memberType);
+            }
+          }
+        } finally {
+          inlineObjectDepth--;
+          schemaTarget = previousTarget;
+        }
+        return members;
+      };
+
+      /** The models of the members of inline objects. They link from the row of the parent field. */
+      const collectInlineObjectRefs = (members: InlineObjectMember[]) =>
+        new Set(members.flatMap((member) => member.members.flatMap(getSchemaFieldModels)));
+
       const addFunctionProp = (prop: Prop, type?: Type) => {
         const propName = sanitizePropertyName(prop.getName());
         const propType = getDeclaredPropType(prop, type);
@@ -746,7 +815,7 @@ export class ModelParser extends Parser {
           if (returnTypeModel) dependencies.add(returnTypeModel);
           const typeRefs = collectTextTypeRefs(returnType, returnTypeNode, returnTypeModel);
 
-          model.schema.push({
+          schemaTarget.push({
             name: propName,
             type: "function",
             accessor: "get",
@@ -779,7 +848,7 @@ export class ModelParser extends Parser {
             );
           }
 
-          model.schema.push({
+          schemaTarget.push({
             name: propName,
             type: "function",
             arguments: functionArguments,
@@ -895,7 +964,7 @@ export class ModelParser extends Parser {
             if (declaredModel) dependencies.add(declaredModel);
           }
 
-          model.schema.push({
+          schemaTarget.push({
             name: propName,
             type: "function",
             arguments: functionArguments,
@@ -932,7 +1001,7 @@ export class ModelParser extends Parser {
         const optional = hasQuestionToken(prop);
 
         const modifiers = getPropModifiers(prop);
-        model.schema.push({
+        schemaTarget.push({
           name: propName,
           type: "array",
           elementType: elementTypeModel ?? elementTypeName,
@@ -1004,11 +1073,80 @@ export class ModelParser extends Parser {
           }
 
           if (typeRefs.size > 0) schemaField.typeRefs = [...typeRefs];
-          model.schema.push(schemaField);
+          schemaTarget.push(schemaField);
           return true;
         }
 
         return false;
+      };
+
+      // the declared member nodes keep an alias such as `Actor | null` as 1 reference; the
+      // checker flattens it into its object members
+      const getDeclaredMemberTypes = (node: TypeNode): Type[] => {
+        if (Node.isParenthesizedTypeNode(node)) return getDeclaredMemberTypes(node.getTypeNode());
+        if (Node.isUnionTypeNode(node)) return node.getTypeNodes().flatMap(getDeclaredMemberTypes);
+        return [node.getType()];
+      };
+
+      /** The union members as written. Undefined when a flattened alias cannot be told apart. */
+      const getUnionMemberTypes = (type: Type, typeNode?: TypeNode): Type[] | undefined => {
+        if (type.getAliasSymbol()) return undefined;
+        if (typeNode) return getDeclaredMemberTypes(typeNode);
+        if (!type.isUnion()) return [type];
+        const origin = (type.compilerType as ts.UnionType & { origin?: ts.UnionType }).origin;
+        if (origin?.types?.some((member) => member.aliasSymbol)) return undefined;
+        return type.getUnionTypes();
+      };
+
+      // `{ a: A } | null` becomes an object field. `B | { a: A }` becomes a union field
+      // with an inline object member. The members link from the row of this field.
+      const addInlineObjectProp = (prop: Prop, propName: string, propType: Type, typeNode?: TypeNode) => {
+        const optional = hasQuestionToken(prop);
+        const memberTypes = getUnionMemberTypes(propType, typeNode);
+        if (!memberTypes) return false;
+        const unionTypes = memberTypes.filter((type) => !(optional && type.isUndefined()));
+        const objectTypes = unionTypes.filter(isInlineObjectType);
+        if (objectTypes.length === 0) return false;
+
+        const typeLocation = "typeLocation" in prop ? prop.typeLocation : prop;
+        const objects = objectTypes.map((type): InlineObjectMember => ({
+          kind: "object",
+          members: buildInlineObjectMembers(type, typeLocation),
+        }));
+        const typeRefs = collectInlineObjectRefs(objects);
+        for (const typeRef of collectTextTypeRefs(propType, typeNode)) typeRefs.add(typeRef);
+        const modifiers = getPropModifiers(prop);
+        const shared = { name: propName, optional, ...(modifiers.length > 0 ? { modifiers } : {}) };
+
+        const otherTypes = unionTypes.filter((type) => !isInlineObjectType(type));
+        if (objects.length === 1 && otherTypes.every((type) => type.isNull())) {
+          schemaTarget.push({
+            ...shared,
+            type: "object",
+            members: objects[0].members,
+            nullable: otherTypes.length > 0,
+            ...(typeRefs.size > 0 ? { typeRefs: [...typeRefs] } : {}),
+          });
+          return true;
+        }
+
+        const types: UnionSchemaField["types"] = [...objects];
+        for (const type of otherTypes) {
+          const typeName = type.getAliasSymbol()?.getName() ?? trimImport(type.getText());
+          const typeModel = resolveExactModelReference(typeName, item.name, type);
+          if (typeModel) {
+            dependencies.add(typeModel);
+            typeRefs.delete(typeModel);
+          }
+          types.push(typeModel ?? typeName);
+        }
+        schemaTarget.push({
+          ...shared,
+          type: "union",
+          types,
+          ...(typeRefs.size > 0 ? { typeRefs: [...typeRefs] } : {}),
+        });
+        return true;
       };
 
       const addDefaultProp = (prop: Prop, type?: Type) => {
@@ -1018,6 +1156,7 @@ export class ModelParser extends Parser {
           "getTypeNode" in prop && typeof prop.getTypeNode === "function"
             ? (prop.getTypeNode() ?? undefined)
             : undefined;
+        if (addInlineObjectProp(prop, propName, propType, typeNode)) return;
         let typeName = getPropTypeText(prop, propType);
 
         const symbolDeclaration = prop.getSymbol?.()?.getDeclarations()?.[0];
@@ -1051,7 +1190,7 @@ export class ModelParser extends Parser {
         const optional = hasQuestionToken(prop);
 
         const modifiers = getPropModifiers(prop);
-        model.schema.push({
+        schemaTarget.push({
           name: propName,
           type: typeModel ?? typeName,
           optional,
@@ -1391,8 +1530,15 @@ export class ModelParser extends Parser {
 
         if (item.node.type.isUnion()) {
           const unionTypes = item.node.type.getUnionTypes();
-          let types: (Model | ({} & string))[] = [];
+          let types: UnionSchemaField["types"] = [];
           for (const type of unionTypes) {
+            if (isInlineObjectType(type)) {
+              types.push({
+                kind: "object",
+                members: buildInlineObjectMembers(type, item.node.declaration),
+              });
+              continue;
+            }
             const typeName = trimImport(type.getText());
             const typeModel = resolveExactModelReference(typeName, item.name, type);
             if (typeModel) dependencies.add(typeModel);
@@ -1423,7 +1569,15 @@ export class ModelParser extends Parser {
             if (referencedModel) dependencies.add(referencedModel);
           }
 
-          model.schema.push({ name: "==>", type: "union", types, optional: false });
+          const unionTypeRefs = collectInlineObjectRefs(types.filter(isInlineObjectMember));
+          for (const type of types) if (typeof type === "object" && "id" in type) unionTypeRefs.delete(type);
+          model.schema.push({
+            name: "==>",
+            type: "union",
+            types,
+            optional: false,
+            ...(unionTypeRefs.size > 0 ? { typeRefs: [...unionTypeRefs] } : {}),
+          });
           dependencyMap.set(item.name, dependencies);
           continue;
         }
@@ -1674,7 +1828,7 @@ export class ModelParser extends Parser {
       const addTypeText = (type: Model | string) => {
         if (typeof type === "string") typeTexts.add(type);
       };
-      for (const field of model.schema) {
+      const addFieldTypeTexts = (field: SchemaField) => {
         if (isArraySchemaField(field)) {
           addTypeText(field.elementType);
         } else if (isGenericSchemaField(field)) {
@@ -1684,11 +1838,17 @@ export class ModelParser extends Parser {
           field.arguments.forEach((argument) => addTypeText(argument.type));
           addTypeText(Array.isArray(field.returnType) ? field.returnType[0] : field.returnType);
         } else if (isUnionSchemaField(field)) {
-          field.types.forEach(addTypeText);
+          for (const type of field.types) {
+            if (isInlineObjectMember(type)) type.members.forEach(addFieldTypeTexts);
+            else addTypeText(type);
+          }
+        } else if (isObjectSchemaField(field)) {
+          field.members.forEach(addFieldTypeTexts);
         } else {
           addTypeText(field.type);
         }
-      }
+      };
+      model.schema.forEach(addFieldTypeTexts);
       model.typeTextSegments = Object.fromEntries(
         [...typeTexts].map((text) => [text, classifyTypeText(text)])
       );

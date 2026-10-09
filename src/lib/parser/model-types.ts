@@ -24,9 +24,25 @@ export type FunctionSchemaField = SharedSchemaField & {
   returnType: Model | [Model | string] | string;
   returnTypeReadonly?: boolean;
 };
-export type UnionSchemaField = SharedSchemaField & { type: "union"; types: (Model | string)[] };
+/** An object literal inside a union. It renders as a nested box. */
+export type InlineObjectMember = { kind: "object"; members: SchemaField[] };
+export type UnionSchemaField = SharedSchemaField & {
+  type: "union";
+  types: (InlineObjectMember | Model | string)[];
+};
+/** A field whose type is 1 object literal, with an optional `| null`. */
+export type ObjectSchemaField = SharedSchemaField & {
+  type: "object";
+  members: SchemaField[];
+  nullable: boolean;
+};
 export type SchemaField =
-  ArraySchemaField | DefaultSchemaField | FunctionSchemaField | GenericSchemaField | UnionSchemaField;
+  | ArraySchemaField
+  | DefaultSchemaField
+  | FunctionSchemaField
+  | GenericSchemaField
+  | ObjectSchemaField
+  | UnionSchemaField;
 
 export const isArraySchemaField = (field: SchemaField): field is ArraySchemaField => {
   return field.type === "array";
@@ -40,13 +56,48 @@ export const isFunctionSchemaField = (field: SchemaField): field is FunctionSche
 export const isUnionSchemaField = (field: SchemaField): field is UnionSchemaField => {
   return field.type === "union";
 };
+// the `members` check keeps a default field typed with the `object` keyword apart
+export const isObjectSchemaField = (field: SchemaField): field is ObjectSchemaField => {
+  return field.type === "object" && "members" in field;
+};
+export const isInlineObjectMember = (
+  value: InlineObjectMember | Model | string | undefined
+): value is InlineObjectMember => {
+  return typeof value === "object" && value !== null && "members" in value;
+};
 export const isDefaultSchemaField = (field: SchemaField): field is DefaultSchemaField => {
   return (
     !isArraySchemaField(field) &&
     !isGenericSchemaField(field) &&
     !isFunctionSchemaField(field) &&
-    !isUnionSchemaField(field)
+    !isUnionSchemaField(field) &&
+    !isObjectSchemaField(field)
   );
+};
+
+const addModel = (models: Model[], value: InlineObjectMember | Model | string | undefined) => {
+  if (typeof value !== "object" || value === undefined) return;
+  if (isInlineObjectMember(value)) {
+    for (const member of value.members) models.push(...getSchemaFieldModels(member));
+  } else {
+    models.push(value);
+  }
+};
+
+/** Every model a field refers to, in its type, its type refs, and the members of its inline objects. */
+export const getSchemaFieldModels = (field: SchemaField): Model[] => {
+  const models: Model[] = [];
+  if (isArraySchemaField(field)) addModel(models, field.elementType);
+  else if (isGenericSchemaField(field)) field.arguments.forEach((argument) => addModel(models, argument));
+  else if (isFunctionSchemaField(field)) {
+    field.arguments.forEach((argument) => addModel(models, argument.type));
+    addModel(models, Array.isArray(field.returnType) ? field.returnType[0] : field.returnType);
+  } else if (isUnionSchemaField(field)) field.types.forEach((type) => addModel(models, type));
+  else if (isObjectSchemaField(field))
+    field.members.forEach((member) => models.push(...getSchemaFieldModels(member)));
+  else addModel(models, field.type);
+  for (const typeRef of field.typeRefs ?? []) models.push(typeRef);
+  return models;
 };
 
 export type TypeTextSegment = {

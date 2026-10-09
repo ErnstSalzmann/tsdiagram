@@ -1,9 +1,11 @@
 import { Edge, Node } from "@xyflow/react";
 import ElkConstructor, { ELK, ElkNode, LayoutOptions } from "elkjs/lib/elk-api";
 import {
+  getSchemaFieldModels,
   isArraySchemaField,
   isFunctionSchemaField,
   isGenericSchemaField,
+  isInlineObjectMember,
   isUnionSchemaField,
   Model,
   TypeAliasModel,
@@ -136,45 +138,12 @@ export const fieldHasSourceEdge = (
   field: Model["schema"][number],
   badgeHubIds: ReadonlySet<string>
 ): boolean => {
-  const refersToNode = (value: Model | string | undefined): boolean =>
-    value instanceof Object && !badgeHubIds.has(value.id);
-  if (field.typeRefs?.some((typeRef) => !badgeHubIds.has(typeRef.id))) return true;
-  if (isArraySchemaField(field)) return refersToNode(field.elementType);
-  if (isGenericSchemaField(field)) return field.arguments.some(refersToNode);
-  if (isFunctionSchemaField(field)) {
-    if (field.arguments.some((argument) => refersToNode(argument.type))) return true;
-    return Array.isArray(field.returnType)
-      ? refersToNode(field.returnType[0])
-      : refersToNode(field.returnType);
-  }
-  if (isUnionSchemaField(field)) return field.types.some(refersToNode);
-  return refersToNode(field.type);
+  return getSchemaFieldModels(field).some((target) => !badgeHubIds.has(target.id));
 };
 
 export const getTypeAliasHeaderDependencies = (model: TypeAliasModel) => {
   const fieldTargets = new Set(
-    model.schema.flatMap((field) => {
-      const targets: string[] = [];
-      if (field.type instanceof Object) targets.push(field.type.id);
-      if (isArraySchemaField(field) && field.elementType instanceof Object) {
-        targets.push(field.elementType.id);
-      }
-      if (isGenericSchemaField(field)) {
-        for (const argument of field.arguments) if (argument instanceof Object) targets.push(argument.id);
-      }
-      if (isFunctionSchemaField(field)) {
-        for (const argument of field.arguments) {
-          if (argument.type instanceof Object) targets.push(argument.type.id);
-        }
-        const returnType = Array.isArray(field.returnType) ? field.returnType[0] : field.returnType;
-        if (returnType instanceof Object) targets.push(returnType.id);
-      }
-      if (isUnionSchemaField(field)) {
-        for (const type of field.types) if (type instanceof Object) targets.push(type.id);
-      }
-      for (const typeRef of field.typeRefs ?? []) targets.push(typeRef.id);
-      return targets;
-    })
+    model.schema.flatMap((field) => getSchemaFieldModels(field).map((target) => target.id))
   );
   return model.dependencies.filter((dependency) => !fieldTargets.has(dependency.id));
 };
@@ -347,7 +316,8 @@ export const extractModelEdges = (
 
       if (isUnionSchemaField(field)) {
         for (const unionType of field.types) {
-          if (unionType instanceof Object) {
+          // an inline object links through the type refs of the field
+          if (unionType instanceof Object && !isInlineObjectMember(unionType)) {
             result.push(
               createModelEdge({
                 id: uniqueEdgeId(`fieldunion-${model.id}-${field.name}-${unionType.id}`),

@@ -1,4 +1,5 @@
 import {
+  InlineObjectMember,
   isArraySchemaField,
   isDefaultSchemaField,
   isFunctionSchemaField,
@@ -14,8 +15,8 @@ const BADGE_HUB_EXIT_MIN = 3;
 
 export const EMPTY_BADGE_HUB_IDS: ReadonlySet<string> = new Set();
 
-const fieldValueReferencesModel = (value: Model | string, modelId: string): boolean =>
-  typeof value === "object" && value.id === modelId;
+const fieldValueReferencesModel = (value: InlineObjectMember | Model | string, modelId: string): boolean =>
+  typeof value === "object" && "id" in value && value.id === modelId;
 
 const schemaFieldHasBadgePill = (model: Model, modelId: string): boolean => {
   return model.schema.some((field) => {
@@ -71,13 +72,13 @@ const isSimpleLeafAlias = (model: Model): boolean => {
 const everyRelationshipHasBadgePill = (model: Model): boolean => {
   return model.dependants.every(
     (dependant) =>
-      !modelHasTextOrHeaderReference(dependant, model.id) && schemaFieldHasBadgePill(dependant, model.id),
+      !modelHasTextOrHeaderReference(dependant, model.id) && schemaFieldHasBadgePill(dependant, model.id)
   );
 };
 
 export const computeBadgeHubIds = (
   models: Model[],
-  previousBadgeHubIds: ReadonlySet<string>,
+  previousBadgeHubIds: ReadonlySet<string>
 ): ReadonlySet<string> => {
   const enterThreshold = Math.max(BADGE_HUB_ENTER_MIN, Math.ceil(models.length * BADGE_HUB_ENTER_RATIO));
   const exitThreshold = Math.max(BADGE_HUB_EXIT_MIN, Math.floor(enterThreshold * BADGE_HUB_EXIT_FACTOR));
