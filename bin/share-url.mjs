@@ -5,9 +5,10 @@ const { compressToEncodedURIComponent } = lzString;
 
 /**
  * Builds the URL that opens `source` as the current document, in the same
- * `#/<lz-string>` format that the share dialog writes.
+ * `#/<lz-string>` format that the share dialog writes. `query` adds renderer
+ * options such as `view` and `direction` as query parameters.
  */
-export const buildShareUrl = (appUrl, source, title = "diagram") => {
+export const buildShareUrl = (appUrl, source, title = "diagram", query = {}) => {
   const id = "cli";
   const state = {
     documents: [{ id, title, source, lastModified: Date.now() }],
@@ -15,6 +16,9 @@ export const buildShareUrl = (appUrl, source, title = "diagram") => {
   };
   const base = new URL(appUrl);
   base.searchParams.set("export", "svg");
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined) base.searchParams.set(key, value);
+  }
   base.hash = `/${compressToEncodedURIComponent(JSON.stringify(state))}`;
   return base.toString();
 };

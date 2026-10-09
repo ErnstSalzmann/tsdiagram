@@ -24,6 +24,20 @@ const userOptionsSchema = z.object({
   }),
 });
 
+const rendererSchema = userOptionsSchema.shape.renderer.shape;
+
+/** The renderer options from the query string, for example `?view=functions&direction=vertical`. */
+const readQueryRendererOptions = () => {
+  const result: { view?: "all" | "functions"; direction?: "horizontal" | "vertical" } = {};
+  if (typeof location === "undefined") return result;
+  const query = new URLSearchParams(location.search);
+  const view = rendererSchema.view.safeParse(query.get("view"));
+  if (view.success) result.view = view.data;
+  const direction = rendererSchema.direction.safeParse(query.get("direction"));
+  if (direction.success) result.direction = direction.data;
+  return result;
+};
+
 export type UserOptions = z.infer<typeof userOptionsSchema> & {
   load: () => void;
   save: () => void;
@@ -56,6 +70,8 @@ export const optionsStore = createStore<UserOptions>({
       parsedData.renderer.autoFitView = true;
       Object.assign(this, parsedData);
     } catch {}
+    // a query parameter wins over the stored options, so a link or the CLI can pick a view
+    Object.assign(this.renderer, readQueryRendererOptions());
   },
   save() {
     localStorage.setItem(

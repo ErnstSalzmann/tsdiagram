@@ -2,6 +2,7 @@
 // Export a TypeScript file to SVG (and PNG) from the command line.
 //
 // Usage: tsdiagram-export <input.ts> [output.svg] [--png] [--scale 2] [--max-side 4096]
+//          [--view all|functions] [--direction horizontal|vertical]
 //          [--url http://localhost:5173] [--chrome <path>] [--timeout 60] [--verbose]
 //
 // It opens the app in headless Chrome with the file as the current document
@@ -46,6 +47,8 @@ const parseArgs = (argv) => {
     else if (argument === "--scale") options.scale = Number(argv[++index]);
     else if (argument === "--max-side") options.maxSide = Number(argv[++index]);
     else if (argument === "--timeout") options.timeout = Number(argv[++index]);
+    else if (argument === "--view") options.view = argv[++index];
+    else if (argument === "--direction") options.direction = argv[++index];
     else if (argument === "--help" || argument === "-h") options.help = true;
     else if (argument === "--verbose") options.verbose = true;
     else positional.push(argument);
@@ -219,13 +222,16 @@ const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.help || !options.input) {
     console.log(
-      "Usage: tsdiagram-export <input.ts> [output.svg] [--png] [--scale 2] [--url http://localhost:5173] [--chrome <path>] [--timeout 60]"
+      "Usage: tsdiagram-export <input.ts> [output.svg] [--png] [--scale 2] [--view all|functions] [--direction horizontal|vertical] [--url http://localhost:5173] [--chrome <path>] [--timeout 60]"
     );
     process.exit(options.help ? 0 : 1);
   }
   const chrome = findChrome(options.chrome);
   const source = await readFile(options.input, "utf8");
-  const pageUrl = buildShareUrl(options.url, source, path.basename(options.input));
+  const pageUrl = buildShareUrl(options.url, source, path.basename(options.input), {
+    direction: options.direction,
+    view: options.view,
+  });
   const svg = await exportSvg({ chrome, pageUrl, timeout: options.timeout });
   await writeFile(options.output, svg);
   console.log(`wrote ${options.output}`);
