@@ -199,6 +199,22 @@ const FieldKey = ({ field }: { field: SchemaField }) => (
 /** The parameters above the return type, with a divider between the 2 lines. */
 const FunctionStack = ({ context, field }: { context: FieldContext; field: FunctionSchemaField }) => {
   const returnType = Array.isArray(field.returnType) ? field.returnType[0] : field.returnType;
+  const returnValue = (
+    <>
+      {field.returnTypeReadonly && <Muted>readonly </Muted>}
+      <TypeValue context={context} value={returnType} />
+      {Array.isArray(field.returnType) && <Muted>[]</Muted>}
+    </>
+  );
+  // a signature without parameters stays on 1 line: a lone "()" line is noise
+  if (field.arguments.length === 0) {
+    return (
+      <span>
+        <Muted>(): </Muted>
+        {returnValue}
+      </span>
+    );
+  }
   return (
     <div className="flex flex-col">
       <div>
@@ -215,11 +231,7 @@ const FunctionStack = ({ context, field }: { context: FieldContext; field: Funct
         />
         <Muted>)</Muted>
       </div>
-      <div className="border-t border-divider">
-        {field.returnTypeReadonly && <Muted>readonly </Muted>}
-        <TypeValue context={context} value={returnType} />
-        {Array.isArray(field.returnType) && <Muted>[]</Muted>}
-      </div>
+      <div className="border-t border-divider">{returnValue}</div>
     </div>
   );
 };
