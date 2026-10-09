@@ -74,6 +74,12 @@ const snapToDevicePixel = (value: number) => Math.round(value * devicePixelRatio
 const nodeTypes = { model: ModelNode, section: SectionNode };
 const edgeTypes = { custom: CustomEdge };
 const proOptions = { hideAttribution: true };
+// a section boundary is a node too; filled, it would cover its members in the minimap
+const minimapNodeColor = (node: { type?: string }) =>
+  node.type === "section" ? "transparent" : "var(--color-border-strong)";
+const minimapNodeStrokeColor = (node: { type?: string }) =>
+  node.type === "section" ? "var(--color-border)" : "transparent";
+
 const minimapStyle = { opacity: 0.9 };
 
 export type RendererProps = {
@@ -743,7 +749,9 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
                 bgColor="var(--color-pane)"
                 className="overflow-hidden rounded-lg border border-border shadow-(--shadow-card)"
                 maskColor="var(--color-border)"
-                nodeColor="var(--color-border-strong)"
+                nodeColor={minimapNodeColor}
+                nodeStrokeColor={minimapNodeStrokeColor}
+                nodeStrokeWidth={6}
                 style={minimapStyle}
                 zoomStep={1}
                 pannable
