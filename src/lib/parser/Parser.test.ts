@@ -146,3 +146,47 @@ it("parses functions, groups overloads, and reads namespaces", () => {
   expect(functions[1].signatures.every((s) => !s.hasBody())).toBe(true);
   expect(functions[2].signatures).toHaveLength(1);
 });
+
+it("reads region sections and assigns each declaration to the header above it", () => {
+  const parser = new Parser(`
+    interface Loose {}
+    // #region Models
+    interface A {}
+    type B = string;
+    // #endregion
+    enum C { One }
+    // #region Ports
+    class D {}
+    namespace N { export function e(): void {} }
+    declare function f(): void;
+  `);
+
+  expect(parser.sections).toEqual([
+    { id: "section-0", title: "Models", order: 0 },
+    { id: "section-1", title: "Ports", order: 1 },
+  ]);
+  expect(parser.interfaces.map((item) => item.section?.title)).toEqual([undefined, "Models"]);
+  expect(parser.typeAliases[0].section?.id).toBe("section-0");
+  expect(parser.enums[0].section).toBeUndefined();
+  expect(parser.classes[0].section?.title).toBe("Ports");
+  expect(parser.functions.map((item) => item.section?.title)).toEqual(["Ports", "Ports"]);
+});
+
+it("reads banner sections from a numbered title next to a dashed line", () => {
+  const parser = new Parser(`
+    // ---------------------------------------------------------------------------
+    // 1. Identity
+    // ---------------------------------------------------------------------------
+    type Id = string;
+
+    // 2. Result
+    // -----
+    type Result = { ok: boolean };
+
+    // 3. Not a section: no dashed line
+    type Plain = number;
+  `);
+
+  expect(parser.sections.map((section) => section.title)).toEqual(["1. Identity", "2. Result"]);
+  expect(parser.typeAliases.map((item) => item.section?.order)).toEqual([0, 1, 1]);
+});

@@ -24,8 +24,12 @@ import {
   TypeAliasDeclaration,
 } from "ts-morph";
 
+/** A group of top-level declarations that a section comment names. */
+export type Section = { id: string; title: string; order: number };
+
 export type ParsedInterface = {
   name: string;
+  section?: Section;
   declaration: InterfaceDeclaration;
   extends: ExpressionWithTypeArguments[];
   properties: PropertySignature[];
@@ -38,12 +42,14 @@ export type ParsedInterface = {
 
 export type ParsedTypeAlias = {
   name: string;
+  section?: Section;
   declaration: TypeAliasDeclaration;
   type: Type;
 };
 
 export type ParsedClass = {
   name: string;
+  section?: Section;
   declaration: ClassDeclaration;
   extends?: ExpressionWithTypeArguments;
   implements: ExpressionWithTypeArguments[];
@@ -56,6 +62,7 @@ export type ParsedClass = {
 
 export type ParsedFunction = {
   name: string;
+  section?: Section;
   /** The first declaration. Closures that need a location use it. */
   declaration: FunctionDeclaration;
   /** The signatures to show: the overloads without a body, or the implementation when it is the only declaration. */
@@ -64,8 +71,54 @@ export type ParsedFunction = {
 
 export type ParsedEnum = {
   name: string;
+  section?: Section;
   declaration: EnumDeclaration;
   members: EnumMember[];
+};
+
+type SectionMarker = { pos: number; section: Section | null };
+
+const REGION_START_PATTERN = /^\/\/\s*#region\b\s*(.*?)\s*$/;
+const REGION_END_PATTERN = /^\/\/\s*#endregion\b/;
+const BANNER_RULE_PATTERN = /^\/\/\s*-{3,}\s*$/;
+const BANNER_TITLE_PATTERN = /^\/\/\s*(\d+\.\s+\S.*?)\s*$/;
+
+/**
+ * Reads the section markers from the line comments before the top-level
+ * statements. A marker is `// #region Title`, `// #endregion`, or a
+ * `// N. Title` line next to a `// ---` line. Comments inside a declaration
+ * are not leading comments of a statement, so they are ignored.
+ */
+const readSectionMarkers = (source: SourceFile): SectionMarker[] => {
+  const markers: SectionMarker[] = [];
+  const addSection = (pos: number, title: string) => {
+    const order = markers.filter((marker) => marker.section).length;
+    markers.push({ pos, section: { id: `section-${order}`, title: title || `Section ${order + 1}`, order } });
+  };
+  for (const statement of source.getStatements()) {
+    const comments = statement.getLeadingCommentRanges().map((range) => ({
+      pos: range.getPos(),
+      text: range.getText(),
+    }));
+    for (const [index, comment] of comments.entries()) {
+      const region = REGION_START_PATTERN.exec(comment.text);
+      if (region) {
+        addSection(comment.pos, region[1]);
+        continue;
+      }
+      if (REGION_END_PATTERN.test(comment.text)) {
+        markers.push({ pos: comment.pos, section: null });
+        continue;
+      }
+      const banner = BANNER_TITLE_PATTERN.exec(comment.text);
+      if (!banner) continue;
+      const neighbors = [comments[index - 1], comments[index + 1]];
+      if (neighbors.some((neighbor) => neighbor && BANNER_RULE_PATTERN.test(neighbor.text))) {
+        addSection(comment.pos, banner[1]);
+      }
+    }
+  }
+  return markers;
 };
 
 type QualifiedModule = {
@@ -148,6 +201,22 @@ export class Parser {
     return this.source.getChildren();
   }
 
+  /** The sections of the source file in source order. */
+  get sections(): Section[] {
+    return readSectionMarkers(this.source).flatMap((marker) => (marker.section ? [marker.section] : []));
+  }
+
+  /** The section of a declaration: the last marker above it. A declaration before the first marker has none. */
+  private sectionOf(declaration: { getStart: () => number }): Section | undefined {
+    const start = declaration.getStart();
+    let section: Section | undefined;
+    for (const marker of readSectionMarkers(this.source)) {
+      if (marker.pos > start) break;
+      section = marker.section ?? undefined;
+    }
+    return section;
+  }
+
   get interfaces(): ParsedInterface[] {
     const result = new Map<
       string,
@@ -179,6 +248,7 @@ export class Parser {
       const item = result.get(name) ?? {
         interface: {
           name,
+          section: this.sectionOf(declaration),
           declaration,
           extends: [],
           properties: [],
@@ -276,7 +346,12 @@ export class Parser {
 
     for (const { moduleName, declaration } of declarations) {
       const name = moduleName ? `${moduleName}.${declaration.getName()}` : declaration.getName();
-      const item = result.get(name) ?? { name, declaration, members: [] };
+      const item = result.get(name) ?? {
+        name,
+        section: this.sectionOf(declaration),
+        declaration,
+        members: [],
+      };
       item.members.push(...declaration.getMembers());
       result.set(name, item);
     }
@@ -296,7 +371,12 @@ export class Parser {
       const baseName = declaration.getName();
       if (!baseName) continue;
       const name = moduleName ? `${moduleName}.${baseName}` : baseName;
-      const item = result.get(name) ?? { name, declaration, signatures: [] };
+      const item = result.get(name) ?? {
+        name,
+        section: this.sectionOf(declaration),
+        declaration,
+        signatures: [],
+      };
       // ts-morph lists only the implementation of an overloaded function; the
       // overloads hang off it. An ambient function has no implementation.
       for (const candidate of [...declaration.getOverloads(), declaration]) {
@@ -326,7 +406,7 @@ export class Parser {
       const name = moduleName ? `${moduleName}.${declaration.getName()}` : declaration.getName();
       const type = declaration.getType();
 
-      result.push({ name, declaration, type });
+      result.push({ name, section: this.sectionOf(declaration), declaration, type });
     }
 
     return result;
@@ -354,6 +434,7 @@ export class Parser {
       const item = result.get(name) ?? {
         class: {
           name,
+          section: this.sectionOf(declaration),
           declaration,
           extends: declaration.getExtends(),
           implements: declaration.getImplements(),

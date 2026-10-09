@@ -43,6 +43,13 @@ export const Preferences = ({ isOpen, onClose }: PreferencesProps) => {
     optionsStore.state.save();
   };
 
+  const handleSectionsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    // re-enable auto-fit so the relayout this triggers is brought into view
+    optionsStore.state.renderer.autoFitView = true;
+    optionsStore.state.renderer.sections = event.target.checked;
+    optionsStore.state.save();
+  };
+
   const handlePanelSplitDirectionChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     optionsStore.state.panels.splitDirection = event.target.value as "horizontal" | "vertical";
     optionsStore.state.save();
@@ -183,6 +190,19 @@ export const Preferences = ({ isOpen, onClose }: PreferencesProps) => {
                       />
                       <label className="check-label" htmlFor="colorize-edges">
                         Colorize edges
+                      </label>
+                    </div>
+
+                    <div className="check-row">
+                      <input
+                        checked={options.renderer.sections}
+                        className="check-input"
+                        id="section-boundaries"
+                        type="checkbox"
+                        onChange={handleSectionsChange}
+                      />
+                      <label className="check-label" htmlFor="section-boundaries">
+                        Section boundaries
                       </label>
                     </div>
                   </div>

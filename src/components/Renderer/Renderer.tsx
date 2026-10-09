@@ -14,6 +14,8 @@ import {
   FitViewOptions,
   MarkerType,
   MiniMap,
+  NodeChange,
+  OnNodesChange,
   Panel,
   ReactFlow,
   useEdgesState,
@@ -38,9 +40,12 @@ import { CustomEdge, selectLowDetail } from "./CustomEdge";
 import { arePortColorsEqual, assignEdgeColors, EDGE_COLOR_PALETTES, EMPTY_PORT_COLORS } from "./edge-colors";
 import { EdgeRoutingProvider } from "./EdgeRoutingProvider";
 import {
+  buildSectionNodes,
+  computeSectionGroups,
   decorateModelEdges,
   extractModelEdges,
   extractModelNodes,
+  isModelNode,
   isUnplacedNode,
   LAYOUT_RESET_NODE_COUNT_CHANGE_THRESHOLD,
   LAYOUT_RESET_NODE_OVERLAP_THRESHOLD,
@@ -48,10 +53,12 @@ import {
   ModelEdge,
   ModelNodeState,
   normalizeLayoutEdges,
+  RendererNodeState,
   shouldResetLayoutAnchors,
 } from "./layout";
 import { ModelNode } from "./ModelNode";
 import { PortColorsContext } from "./port-colors";
+import { SectionNode } from "./SectionNode";
 
 const AUTO_LAYOUT_THROTTLE_MS = 120;
 
@@ -59,7 +66,7 @@ const AUTO_LAYOUT_THROTTLE_MS = 120;
 // device pixels or its text is resampled at a fractional offset until the layer is dropped
 const snapToDevicePixel = (value: number) => Math.round(value * devicePixelRatio) / devicePixelRatio;
 
-const nodeTypes = { model: ModelNode };
+const nodeTypes = { model: ModelNode, section: SectionNode };
 const edgeTypes = { custom: CustomEdge };
 const proOptions = { hideAttribution: true };
 const minimapStyle = { opacity: 0.9 };
@@ -72,10 +79,15 @@ export type RendererProps = {
 };
 
 export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }: RendererProps) => {
-  const { fitView, getNodes, getEdges } = useReactFlow<ModelNodeState, ModelEdge>();
+  const { fitView, getNodes, getEdges } = useReactFlow<RendererNodeState, ModelEdge>();
   const reactFlowStore = useStoreApi();
   const updateNodeInternals = useUpdateNodeInternals();
   const [nodes, setNodes, onNodesChange] = useNodesState<ModelNodeState>([]);
+  // the section nodes are derived, so a change for one of their ids finds no node and is dropped
+  const handleNodesChange = useCallback<OnNodesChange<RendererNodeState>>(
+    (changes) => onNodesChange(changes as NodeChange<ModelNodeState>[]),
+    [onNodesChange]
+  );
   const [edges, setEdges, onEdgesChange] = useEdgesState<ModelEdge>([]);
   const cachedNodesMap = useRef<Map<string, ModelNodeState>>(new Map());
   const manuallyMovedNodesSet = useRef<Set<string>>(new Set());
@@ -148,6 +160,10 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
 
   const parsedNodes = useMemo(() => extractModelNodes(models, badgeHubIds), [models, badgeHubIds]);
   const modelEdges = useMemo(() => extractModelEdges(models, badgeHubIds), [models, badgeHubIds]);
+  const sectionGroups = useMemo(
+    () => (options.renderer.sections ? computeSectionGroups(models) : null),
+    [models, options.renderer.sections]
+  );
   useEffect(() => {
     const { hoveredNode, selectedNode } = graphStore.state;
     if (hoveredNode) {
@@ -225,7 +241,8 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
           layoutRequestedRef.current = true;
           return;
         }
-        const currentNodes = getNodes();
+        // the section boundaries are derived from the model nodes after the layout
+        const currentNodes = getNodes().filter(isModelNode);
         if (currentNodes.length === 0) return;
         const currentEdges = normalizeLayoutEdges(getEdges());
         const hasSizeForAllNodes = currentNodes.every(
@@ -240,6 +257,7 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
           direction: options.renderer.direction,
           edges: currentEdges,
           manuallyMovedNodesSet: manuallyMovedNodesSet.current,
+          groups: sectionGroups,
           nodes: currentNodes,
         })
           .then((layoutedNodes) => {
@@ -274,6 +292,7 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     options.renderer.autoFitView,
     options.renderer.compactLayout,
     options.renderer.direction,
+    sectionGroups,
     setNodes,
   ]);
 
@@ -288,12 +307,13 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     };
   }, [handleAutoLayout]);
 
-  const previousCompactLayoutRef = useRef(options.renderer.compactLayout);
+  const layoutOptionsKey = `${options.renderer.compactLayout}|${options.renderer.sections}`;
+  const previousLayoutOptionsKeyRef = useRef(layoutOptionsKey);
   useEffect(() => {
-    if (previousCompactLayoutRef.current === options.renderer.compactLayout) return;
-    previousCompactLayoutRef.current = options.renderer.compactLayout;
+    if (previousLayoutOptionsKeyRef.current === layoutOptionsKey) return;
+    previousLayoutOptionsKeyRef.current = layoutOptionsKey;
     handleAutoLayoutRef.current();
-  }, [options.renderer.compactLayout]);
+  }, [layoutOptionsKey]);
 
   // update nodes and edges after parsing (before auto layout)
   useLayoutEffect(() => {
@@ -515,17 +535,17 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     },
     [options.renderer, reactFlowStore]
   );
-  const handleNodeDragStop = useCallback((_event: MouseEvent | TouchEvent, node: ModelNodeState) => {
-    manuallyMovedNodesSet.current.add(node.id);
+  const handleNodeDragStop = useCallback((_event: MouseEvent | TouchEvent, node: RendererNodeState) => {
+    if (isModelNode(node)) manuallyMovedNodesSet.current.add(node.id);
   }, []);
-  const handleNodeMouseEnter = useCallback((_event: React.MouseEvent, node: ModelNodeState) => {
-    graphStore.state.hoveredNode = node;
+  const handleNodeMouseEnter = useCallback((_event: React.MouseEvent, node: RendererNodeState) => {
+    if (isModelNode(node)) graphStore.state.hoveredNode = node;
   }, []);
   const handleNodeMouseLeave = useCallback(() => {
     graphStore.state.hoveredNode = null;
   }, []);
-  const handleNodeClick = useCallback((_event: React.MouseEvent, node: ModelNodeState) => {
-    graphStore.state.selectedNode = node;
+  const handleNodeClick = useCallback((_event: React.MouseEvent, node: RendererNodeState) => {
+    if (isModelNode(node)) graphStore.state.selectedNode = node;
   }, []);
   const handleEdgeClick = useCallback((_event: React.MouseEvent, edge: ModelEdge) => {
     graphStore.state.selectedEdge = edge;
@@ -545,6 +565,15 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     previousPanelDirection.current = options.panels.splitDirection;
     requestIdleCallback(() => fitView(fitViewOptions));
   }, [fitView, fitViewOptions, options.panels.splitDirection, options.renderer]);
+
+  const sectionNodes = useMemo(
+    () => (options.renderer.sections ? buildSectionNodes(nodes) : []),
+    [nodes, options.renderer.sections]
+  );
+  const renderedNodes = useMemo<RendererNodeState[]>(
+    () => (sectionNodes.length > 0 ? [...sectionNodes, ...nodes] : nodes),
+    [nodes, sectionNodes]
+  );
 
   const { isFullscreen, toggleFullscreen } = useFullscreen(containerRef);
   const isLoading = isParsing || isPlacing;
@@ -587,7 +616,7 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
             maxZoom={2}
             minZoom={0.1}
             nodeTypes={nodeTypes}
-            nodes={nodes}
+            nodes={renderedNodes}
             nodesConnectable={false}
             proOptions={proOptions}
             elevateEdgesOnSelect
@@ -603,7 +632,7 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
             onNodeDragStop={handleNodeDragStop}
             onNodeMouseEnter={handleNodeMouseEnter}
             onNodeMouseLeave={handleNodeMouseLeave}
-            onNodesChange={onNodesChange}
+            onNodesChange={handleNodesChange}
             onPaneClick={handlePaneClick}
           >
             <Panel position="top-center">

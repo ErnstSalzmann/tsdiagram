@@ -351,6 +351,7 @@ export class ModelParser extends Parser {
       const model: InterfaceModel = {
         id: name,
         name,
+        ...(_interface.section ? { section: _interface.section } : {}),
         extends: [],
         schema: [],
         typeTextSegments: {},
@@ -384,6 +385,7 @@ export class ModelParser extends Parser {
       const model: TypeAliasModel = {
         id: name,
         name,
+        ...(typeAlias.section ? { section: typeAlias.section } : {}),
         schema: [],
         typeTextSegments: {},
         dependencies: [],
@@ -413,6 +415,7 @@ export class ModelParser extends Parser {
       const model: FunctionModel = {
         id: name,
         name,
+        ...(currentFunction.section ? { section: currentFunction.section } : {}),
         schema: [],
         typeTextSegments: {},
         dependencies: [],
@@ -442,6 +445,7 @@ export class ModelParser extends Parser {
       const model: ClassModel = {
         id: name,
         name,
+        ...(currentClass.section ? { section: currentClass.section } : {}),
         implements: [],
         schema: [],
         typeTextSegments: {},
@@ -471,6 +475,7 @@ export class ModelParser extends Parser {
       const model: EnumModel = {
         id: name,
         name,
+        ...(_enum.section ? { section: _enum.section } : {}),
         schema: _enum.members.map((member) => {
           const value = member.getValue();
           const valueText =

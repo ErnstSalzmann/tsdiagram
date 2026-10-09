@@ -24,6 +24,11 @@ const getElk = () => {
 export type LayoutDirection = "horizontal" | "vertical";
 export type LayoutPreset = "anchored" | "fresh" | "legacy";
 export type ModelNodeState = Node<{ model: Model; badgeHubIds: ReadonlySet<string> }>;
+/** The boundary that is drawn behind the nodes of one section. It is derived after the layout. */
+export type SectionNodeState = Node<{ title: string }, "section">;
+export type RendererNodeState = ModelNodeState | SectionNodeState;
+
+export const isModelNode = (node: RendererNodeState): node is ModelNodeState => node.type === "model";
 
 type LayoutEdgeKind =
   | "dependency"
@@ -81,6 +86,10 @@ type LayoutModelNodesArgs = {
   edges: ModelEdge[];
   manuallyMovedNodesSet: Set<string>;
   nodes: ModelNodeState[];
+  /** The section id per node id. Each section becomes an elk compound node. */
+  groups?: ReadonlyMap<string, string> | null;
+  /** The elk partition per node id. Elk ignores partitions unless every node has one. */
+  partitions?: ReadonlyMap<string, number> | null;
   preset?: LayoutPreset;
 };
 
@@ -111,7 +120,7 @@ export const isUnplacedNode = (node: Pick<Node, "position">) =>
 
 export const extractModelNodes = (
   models: Model[],
-  badgeHubIds: ReadonlySet<string> = EMPTY_BADGE_HUB_IDS,
+  badgeHubIds: ReadonlySet<string> = EMPTY_BADGE_HUB_IDS
 ): ModelNodeState[] => {
   return models
     .filter((model) => !badgeHubIds.has(model.id))
@@ -125,7 +134,7 @@ export const extractModelNodes = (
 
 export const fieldHasSourceEdge = (
   field: Model["schema"][number],
-  badgeHubIds: ReadonlySet<string>,
+  badgeHubIds: ReadonlySet<string>
 ): boolean => {
   const refersToNode = (value: Model | string | undefined): boolean =>
     value instanceof Object && !badgeHubIds.has(value.id);
@@ -134,8 +143,8 @@ export const fieldHasSourceEdge = (
   if (isGenericSchemaField(field)) return field.arguments.some(refersToNode);
   if (isFunctionSchemaField(field)) {
     if (field.arguments.some((argument) => refersToNode(argument.type))) return true;
-    return Array.isArray(field.returnType) ?
-        refersToNode(field.returnType[0])
+    return Array.isArray(field.returnType)
+      ? refersToNode(field.returnType[0])
       : refersToNode(field.returnType);
   }
   if (isUnionSchemaField(field)) return field.types.some(refersToNode);
@@ -165,14 +174,14 @@ export const getTypeAliasHeaderDependencies = (model: TypeAliasModel) => {
       }
       for (const typeRef of field.typeRefs ?? []) targets.push(typeRef.id);
       return targets;
-    }),
+    })
   );
   return model.dependencies.filter((dependency) => !fieldTargets.has(dependency.id));
 };
 
 export const extractModelEdges = (
   models: Model[],
-  badgeHubIds: ReadonlySet<string> = EMPTY_BADGE_HUB_IDS,
+  badgeHubIds: ReadonlySet<string> = EMPTY_BADGE_HUB_IDS
 ): ModelEdge[] => {
   const result: ModelEdge[] = [];
 
@@ -194,7 +203,7 @@ export const extractModelEdges = (
               layoutKind: "extends",
               source: model.id,
               target: extended.id,
-            }),
+            })
           );
         }
       }
@@ -208,7 +217,7 @@ export const extractModelEdges = (
             layoutKind: "dependency",
             source: model.id,
             target: dependency.id,
-          }),
+          })
         );
       }
     }
@@ -221,7 +230,7 @@ export const extractModelEdges = (
             layoutKind: "extends",
             source: model.id,
             target: model.extends.id,
-          }),
+          })
         );
       }
 
@@ -233,7 +242,7 @@ export const extractModelEdges = (
               layoutKind: "implements",
               source: model.id,
               target: implemented.id,
-            }),
+            })
           );
         }
       }
@@ -247,7 +256,7 @@ export const extractModelEdges = (
             layoutKind: "extends",
             source: model.id,
             target: headerRef.id,
-          }),
+          })
         );
       }
     }
@@ -261,7 +270,7 @@ export const extractModelEdges = (
             source: model.id,
             sourceHandle: `${model.id}-source-${field.name}`,
             target: field.type.id,
-          }),
+          })
         );
       }
 
@@ -273,7 +282,7 @@ export const extractModelEdges = (
             source: model.id,
             sourceHandle: `${model.id}-source-${field.name}`,
             target: field.elementType.id,
-          }),
+          })
         );
       }
 
@@ -287,7 +296,7 @@ export const extractModelEdges = (
                 source: model.id,
                 sourceHandle: `${model.id}-source-${field.name}`,
                 target: argument.id,
-              }),
+              })
             );
           }
         }
@@ -303,7 +312,7 @@ export const extractModelEdges = (
                 source: model.id,
                 sourceHandle: `${model.id}-source-${field.name}`,
                 target: argument.type.id,
-              }),
+              })
             );
           }
         }
@@ -317,7 +326,7 @@ export const extractModelEdges = (
               source: model.id,
               sourceHandle: `${model.id}-source-${field.name}`,
               target: returnType.id,
-            }),
+            })
           );
         }
       }
@@ -331,7 +340,7 @@ export const extractModelEdges = (
               source: model.id,
               sourceHandle: `${model.id}-source-${field.name}`,
               target: typeRef.id,
-            }),
+            })
           );
         }
       }
@@ -346,7 +355,7 @@ export const extractModelEdges = (
                 source: model.id,
                 sourceHandle: `${model.id}-source-${field.name}`,
                 target: unionType.id,
-              }),
+              })
             );
           }
         }
@@ -359,7 +368,7 @@ export const extractModelEdges = (
 
 export const decorateModelEdges = (
   edges: ModelEdge[],
-  sharedEdgeProps: SharedModelEdgeProps = {},
+  sharedEdgeProps: SharedModelEdgeProps = {}
 ): ModelEdge[] => {
   return edges.map((edge) => ({
     ...edge,
@@ -471,48 +480,105 @@ export const getLayoutPreset = (manuallyMovedNodesSet: Set<string>): LayoutPrese
 
 const NO_PINNED_IDS: ReadonlySet<string> = new Set();
 
+/** Room inside a section box: the title needs the top. The drawn boundary uses the same padding. */
+const SECTION_PAD_PX = 24;
+const SECTION_TITLE_PAD_PX = 40;
+
 export const layoutModelNodes = async ({
   compact,
   direction,
   edges,
+  groups,
   manuallyMovedNodesSet,
   nodes,
+  partitions,
   preset,
 }: LayoutModelNodesArgs): Promise<ModelNodeState[]> => {
   const resolvedPreset = preset ?? getLayoutPreset(manuallyMovedNodesSet);
-  const elkOptions = getLayoutOptions(direction, resolvedPreset);
+  // partitions and groups order the whole graph, so the components must share one layout
+  const elkOptions: LayoutOptions = {
+    ...getLayoutOptions(direction, resolvedPreset),
+    ...(partitions ? { "elk.partitioning.activate": "true" } : {}),
+    ...(groups ? { "elk.hierarchyHandling": "INCLUDE_CHILDREN" } : {}),
+    ...(partitions || groups ? { "elk.separateConnectedComponents": "false" } : {}),
+  };
 
-  const graph: ElkNode = {
-    children: nodes.map((node) => {
-      const isPinned = manuallyMovedNodesSet.has(node.id);
+  // a pinned node inside a group is pinned relative to the group, so the group
+  // starts at the top left corner of its current members
+  const groupOrigins = new Map<string, { x: number; y: number }>();
+  if (groups && resolvedPreset === "anchored") {
+    for (const node of nodes) {
+      const groupId = groups.get(node.id);
+      if (!groupId) continue;
+      const origin = groupOrigins.get(groupId) ?? { x: Infinity, y: Infinity };
+      origin.x = Math.min(origin.x, node.position.x);
+      origin.y = Math.min(origin.y, node.position.y);
+      groupOrigins.set(groupId, origin);
+    }
+  }
 
-      // overload rows share a field name, so ports are deduped by id
-      const ports = new Map<string, { id: string; order: number; properties: Record<string, string> }>();
-      for (const [index, field] of node.data.model.schema.entries()) {
-        const portId = `${node.id}-source-${field.name}`;
-        if (ports.has(portId)) continue;
-        ports.set(portId, {
-          id: portId,
-          order: index,
-          properties: {
-            "port.side": "EAST",
-          },
-        });
-      }
+  const toElkNode = (node: ModelNodeState): ElkNode => {
+    const isPinned = manuallyMovedNodesSet.has(node.id);
+    const origin = groupOrigins.get(groups?.get(node.id) ?? "") ?? { x: 0, y: 0 };
 
-      return {
-        height: node.measured?.height ?? 0,
-        id: node.id,
-        ports: [...ports.values()],
-        ...(resolvedPreset === "anchored" && isPinned ?
-          {
-            x: node.position.x,
-            y: node.position.y,
+    // overload rows share a field name, so ports are deduped by id
+    const ports = new Map<string, { id: string; order: number; properties: Record<string, string> }>();
+    for (const [index, field] of node.data.model.schema.entries()) {
+      const portId = `${node.id}-source-${field.name}`;
+      if (ports.has(portId)) continue;
+      ports.set(portId, {
+        id: portId,
+        order: index,
+        properties: {
+          "port.side": "EAST",
+        },
+      });
+    }
+
+    return {
+      height: node.measured?.height ?? 0,
+      id: node.id,
+      ...(partitions
+        ? { layoutOptions: { "elk.partitioning.partition": String(partitions.get(node.id) ?? 0) } }
+        : {}),
+      ports: [...ports.values()],
+      ...(resolvedPreset === "anchored" && isPinned
+        ? {
+            x: node.position.x - origin.x,
+            y: node.position.y - origin.y,
           }
         : {}),
-        width: node.measured?.width ?? 0,
-      };
-    }),
+      width: node.measured?.width ?? 0,
+    };
+  };
+
+  const children: ElkNode[] = [];
+  const groupChildren = new Map<string, ElkNode[]>();
+  for (const node of nodes) {
+    const groupId = groups?.get(node.id);
+    if (!groupId) {
+      children.push(toElkNode(node));
+      continue;
+    }
+    let members = groupChildren.get(groupId);
+    if (!members) {
+      members = [];
+      groupChildren.set(groupId, members);
+      const origin = groupOrigins.get(groupId);
+      children.push({
+        children: members,
+        id: `group:${groupId}`,
+        layoutOptions: {
+          "elk.padding": `[top=${SECTION_TITLE_PAD_PX},left=${SECTION_PAD_PX},bottom=${SECTION_PAD_PX},right=${SECTION_PAD_PX}]`,
+        },
+        ...(origin ? { x: origin.x, y: origin.y } : {}),
+      });
+    }
+    members.push(toElkNode(node));
+  }
+
+  const graph: ElkNode = {
+    children,
     edges: edges.map((edge) => ({
       id: edge.id,
       sources: [edge.sourceHandle ?? edge.source],
@@ -523,29 +589,101 @@ export const layoutModelNodes = async ({
   };
 
   const layoutedGraph = await getElk().layout(graph, { layoutOptions: elkOptions });
-  const layoutedNodesMap = new Map(layoutedGraph.children?.map((node) => [node.id, node]) ?? []);
+  // a child of a group has coordinates relative to the group
+  const layoutedPositions = new Map<string, { x: number; y: number }>();
+  const collectPositions = (parent: ElkNode, offsetX: number, offsetY: number) => {
+    for (const child of parent.children ?? []) {
+      const x = offsetX + (child.x ?? 0);
+      const y = offsetY + (child.y ?? 0);
+      layoutedPositions.set(child.id, { x, y });
+      collectPositions(child, x, y);
+    }
+  };
+  collectPositions(layoutedGraph, 0, 0);
 
   const layoutedNodes = nodes.map((node) => {
-    const layoutedNode = layoutedNodesMap.get(node.id);
-    if (!layoutedNode) return node;
+    const layoutedPosition = layoutedPositions.get(node.id);
+    if (!layoutedPosition) return node;
 
     const isPinned = resolvedPreset === "anchored" && manuallyMovedNodesSet.has(node.id);
 
     return {
       ...node,
-      position: {
-        x: isPinned ? node.position.x : (layoutedNode.x ?? node.position.x),
-        y: isPinned ? node.position.y : (layoutedNode.y ?? node.position.y),
-      },
+      position: isPinned ? node.position : layoutedPosition,
     };
   });
 
   if (!compact) return layoutedNodes;
-  return compactLayoutedNodes({
-    direction,
-    nodes: layoutedNodes,
-    pinnedIds: resolvedPreset === "anchored" ? manuallyMovedNodesSet : NO_PINNED_IDS,
-  });
+  const pinnedIds = resolvedPreset === "anchored" ? manuallyMovedNodesSet : NO_PINNED_IDS;
+  if (!groups) return compactLayoutedNodes({ direction, nodes: layoutedNodes, pinnedIds });
+  // compaction per group keeps every node inside its section box
+  const nodesByGroup = new Map<string, ModelNodeState[]>();
+  for (const node of layoutedNodes) {
+    const groupId = groups.get(node.id) ?? "";
+    nodesByGroup.set(groupId, [...(nodesByGroup.get(groupId) ?? []), node]);
+  }
+  const compacted = new Map<string, ModelNodeState>();
+  for (const groupNodes of nodesByGroup.values()) {
+    for (const node of compactLayoutedNodes({ direction, nodes: groupNodes, pinnedIds })) {
+      compacted.set(node.id, node);
+    }
+  }
+  return layoutedNodes.map((node) => compacted.get(node.id) ?? node);
+};
+
+/** The section id per model id, or null when no model has a section. */
+export const computeSectionGroups = (models: Model[]): Map<string, string> | null => {
+  const groups = new Map<string, string>();
+  for (const model of models) if (model.section) groups.set(model.id, model.section.id);
+  return groups.size > 0 ? groups : null;
+};
+
+/**
+ * One boundary node per section, sized to the placed and measured member
+ * nodes plus padding. The boundary takes no pointer events and no layout.
+ */
+export const buildSectionNodes = (nodes: ModelNodeState[]): SectionNodeState[] => {
+  const boxes = new Map<
+    string,
+    { title: string; order: number; left: number; top: number; right: number; bottom: number }
+  >();
+  for (const node of nodes) {
+    const { section } = node.data.model;
+    if (!section || isUnplacedNode(node) || !node.measured?.width || !node.measured.height) continue;
+    const box = boxes.get(section.id) ?? {
+      title: section.title,
+      order: section.order,
+      left: Infinity,
+      top: Infinity,
+      right: -Infinity,
+      bottom: -Infinity,
+    };
+    box.left = Math.min(box.left, node.position.x);
+    box.top = Math.min(box.top, node.position.y);
+    box.right = Math.max(box.right, node.position.x + node.measured.width);
+    box.bottom = Math.max(box.bottom, node.position.y + node.measured.height);
+    boxes.set(section.id, box);
+  }
+  return [...boxes.entries()]
+    .sort(([, a], [, b]) => a.order - b.order)
+    .map(([id, box]) => {
+      const width = box.right - box.left + SECTION_PAD_PX * 2;
+      const height = box.bottom - box.top + SECTION_PAD_PX + SECTION_TITLE_PAD_PX;
+      return {
+        connectable: false,
+        data: { title: box.title },
+        draggable: false,
+        focusable: false,
+        height,
+        id: `section:${id}`,
+        measured: { height, width },
+        position: { x: box.left - SECTION_PAD_PX, y: box.top - SECTION_TITLE_PAD_PX },
+        selectable: false,
+        type: "section",
+        width,
+        zIndex: -1,
+      };
+    });
 };
 
 const COMPACT_PAD_PX = 72;

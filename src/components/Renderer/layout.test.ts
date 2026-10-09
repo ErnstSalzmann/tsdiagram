@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { ModelParser } from "../../lib/parser/ModelParser";
-import { compactLayoutedNodes, extractModelEdges, fieldHasSourceEdge, ModelNodeState } from "./layout";
+import {
+  buildSectionNodes,
+  compactLayoutedNodes,
+  extractModelEdges,
+  fieldHasSourceEdge,
+  ModelNodeState,
+} from "./layout";
 
 const NO_PINS: ReadonlySet<string> = new Set();
 
@@ -229,5 +235,27 @@ describe("fieldHasSourceEdge", () => {
 
     expect(fieldHasSourceEdge(field, new Set())).toBe(true);
     expect(fieldHasSourceEdge(field, new Set(["Id"]))).toBe(false);
+  });
+});
+
+describe("buildSectionNodes", () => {
+  it("draws one boundary around the placed nodes of each section and skips loose nodes", () => {
+    const section = { id: "section-0", title: "Core", order: 0 };
+    const a = makeNode("a", 100, 100, 200, 50);
+    const b = makeNode("b", 400, 300, 100, 100);
+    const loose = makeNode("loose", 0, 0, 50, 50);
+    const unplaced = makeNode("unplaced", -1, -1, 50, 50);
+    a.data.model.section = section;
+    b.data.model.section = section;
+    unplaced.data.model.section = section;
+
+    const [boundary, ...rest] = buildSectionNodes([a, b, loose, unplaced]);
+
+    expect(rest).toEqual([]);
+    expect(boundary.id).toBe("section:section-0");
+    expect(boundary.data.title).toBe("Core");
+    expect(boundary.position).toEqual({ x: 76, y: 60 });
+    expect(boundary.width).toBe(448);
+    expect(boundary.height).toBe(364);
   });
 });

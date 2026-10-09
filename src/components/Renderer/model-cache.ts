@@ -53,6 +53,7 @@ const computeModelSignature = (model: Model): string => {
   const base = {
     id: model.id,
     name: model.name,
+    section: model.section ?? null,
     type: model.type,
     arguments: model.arguments,
     schema: model.schema.map(schemaFieldToken),

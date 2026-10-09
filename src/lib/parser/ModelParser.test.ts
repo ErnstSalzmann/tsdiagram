@@ -3163,3 +3163,17 @@ it("renders a branded primitive as its declared type, not as the members of Stri
   expect(employee?.schema.map((field) => field.name)).toEqual(["id", "head"]);
   expect(employee?.dependencies.map((m) => m.name).sort()).toEqual(["Count", "EmployeeId"]);
 });
+
+it("carries the section of a declaration on its model", () => {
+  const models = new ModelParser(`
+    type Loose = string;
+    // #region Core
+    interface A {}
+    declare function run(a: A): void;
+  `).getModels();
+  const byName = new Map(models.map((model) => [model.name, model]));
+
+  expect(byName.get("Loose")?.section).toBeUndefined();
+  expect(byName.get("A")?.section).toEqual({ id: "section-0", title: "Core", order: 0 });
+  expect(byName.get("run")?.section?.id).toBe("section-0");
+});

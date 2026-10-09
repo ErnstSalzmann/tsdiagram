@@ -76,6 +76,8 @@ const getHandlePort = (node: InternalNode, type: "source" | "target", handleId?:
 const buildRoutingInput = (nodeLookup: ReadonlyMap<string, InternalNode>, edges: readonly Edge[]) => {
   const input: EdgeRoutingInput = { edges: [], nodes: [] };
   for (const node of nodeLookup.values()) {
+    // a section boundary sits behind the nodes; edges cross it freely
+    if (node.type === "section") continue;
     const width = node.measured.width;
     const height = node.measured.height;
     if (!width || !height) return null;

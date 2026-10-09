@@ -57,6 +57,8 @@ export type TypeTextSegment = {
 export type ModelBase = {
   id: string;
   name: string;
+  /** The section comment above the declaration, when there is one. */
+  section?: { id: string; title: string; order: number };
   schema: SchemaField[];
   typeTextSegments: Record<string, TypeTextSegment[]>;
   dependencies: Model[];

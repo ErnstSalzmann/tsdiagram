@@ -19,6 +19,7 @@ const userOptionsSchema = z.object({
     badgeHubs: z.boolean().default(true),
     compactLayout: z.boolean().default(true),
     colorizeEdges: z.boolean().default(true),
+    sections: z.boolean().default(true),
   }),
 });
 
@@ -44,6 +45,7 @@ export const optionsStore = createStore<UserOptions>({
     badgeHubs: true,
     compactLayout: true,
     colorizeEdges: true,
+    sections: true,
   },
   load() {
     try {
