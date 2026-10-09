@@ -2,11 +2,13 @@ import { Edge, Node } from "@xyflow/react";
 import ElkConstructor, { ELK, ElkNode, LayoutOptions } from "elkjs/lib/elk-api";
 import {
   isArraySchemaField,
+  isDefaultSchemaField,
   isFunctionSchemaField,
   isGenericSchemaField,
   isUnionSchemaField,
   Model,
   TypeAliasModel,
+  TypeTextSegment,
 } from "../../lib/parser/model-types";
 import { EMPTY_BADGE_HUB_IDS } from "./badge-hubs";
 
@@ -23,7 +25,13 @@ const getElk = () => {
 
 export type LayoutDirection = "horizontal" | "vertical";
 export type LayoutPreset = "anchored" | "fresh" | "legacy";
-export type ModelNodeState = Node<{ model: Model; badgeHubIds: ReadonlySet<string> }>;
+export type ModelNodeState = Node<{
+  model: Model;
+  /** The models without a node: badge hubs, collapsed leaves, and models outside the view. */
+  badgeHubIds: ReadonlySet<string>;
+  /** The subset of `badgeHubIds` that renders as inline text instead of a pill. */
+  collapsedLeafIds: ReadonlySet<string>;
+}>;
 /** The boundary that is drawn behind the nodes of one section. It is derived after the layout. */
 export type SectionNodeState = Node<{ title: string }, "section">;
 export type RendererNodeState = ModelNodeState | SectionNodeState;
@@ -120,16 +128,52 @@ export const isUnplacedNode = (node: Pick<Node, "position">) =>
 
 export const extractModelNodes = (
   models: Model[],
-  badgeHubIds: ReadonlySet<string> = EMPTY_BADGE_HUB_IDS
+  badgeHubIds: ReadonlySet<string> = EMPTY_BADGE_HUB_IDS,
+  collapsedLeafIds: ReadonlySet<string> = EMPTY_BADGE_HUB_IDS
 ): ModelNodeState[] => {
   return models
     .filter((model) => !badgeHubIds.has(model.id))
     .map((model) => ({
-      data: { model, badgeHubIds },
+      data: { model, badgeHubIds, collapsedLeafIds },
       id: model.id,
       position: UNPLACED_NODE_POSITION,
       type: "model",
     }));
+};
+
+/** Leaf text has only primitives, literals, references, and punctuation. An object type has words. */
+const isLeafText = (segments: TypeTextSegment[] | undefined) =>
+  segments !== undefined &&
+  segments.every((segment) => segment.kind !== "default" || !/[A-Za-z]/.test(segment.text));
+
+/**
+ * A leaf is a type alias with 1 `==>` row that names no other model. A generic
+ * utility such as `Brand<T, Name>` is the exception: `Brand<string, "EmployeeId">`
+ * is a leaf. The row is a primitive, a literal union, or text of those.
+ */
+export const isLeafModel = (model: Model): model is TypeAliasModel => {
+  if (model.type !== "typeAlias" || model.arguments.length > 0 || model.schema.length !== 1) return false;
+  const [row] = model.schema;
+  if (row.name !== "==>") return false;
+  if (!model.dependencies.every((dependency) => dependency.arguments.length > 0)) return false;
+  const texts = isUnionSchemaField(row) ? row.types : isDefaultSchemaField(row) ? [row.type] : [];
+  if (texts.length === 0) return false;
+  return texts.every((text) => typeof text === "string" && isLeafText(model.typeTextSegments[text]));
+};
+
+/** The declared type of a leaf, for example `Brand<string, "EmployeeId">` or `"a" | "b"`. */
+export const describeLeafType = (model: TypeAliasModel): string => {
+  const [row] = model.schema;
+  if (isUnionSchemaField(row))
+    return row.types.map((type) => (typeof type === "string" ? type : type.name)).join(" | ");
+  return typeof row.type === "string" ? row.type : row.type.name;
+};
+
+/** The leaves that at least 1 other model references. They get no node and no edges. */
+export const selectCollapsedLeafIds = (models: Model[]): Set<string> => {
+  const ids = new Set<string>();
+  for (const model of models) if (isLeafModel(model) && model.dependants.length > 0) ids.add(model.id);
+  return ids;
 };
 
 export const fieldHasSourceEdge = (

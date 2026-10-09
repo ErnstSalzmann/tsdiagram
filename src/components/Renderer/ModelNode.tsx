@@ -10,12 +10,12 @@ import {
   TypeTextSegment,
 } from "../../lib/parser/model-types";
 import { graphStore, useIsBadgeHubHovered, useNodeDecoration } from "../../stores/graph";
-import { fieldHasSourceEdge, getTypeAliasHeaderDependencies } from "./layout";
+import { describeLeafType, fieldHasSourceEdge, getTypeAliasHeaderDependencies, isLeafModel } from "./layout";
 import { usePortColor } from "./port-colors";
 
 export type ModelNodeProps = {
   id: string;
-  data: { model: Model; badgeHubIds: ReadonlySet<string> };
+  data: { model: Model; badgeHubIds: ReadonlySet<string>; collapsedLeafIds: ReadonlySet<string> };
 };
 
 const isModelReference = (value: unknown): value is Model => {
@@ -88,7 +88,24 @@ const HubBadgePill = ({ refModel }: { refModel: Model }) => {
   );
 };
 
-const TypeNameSpan = ({ badgeHubIds, refModel }: { badgeHubIds: ReadonlySet<string>; refModel: Model }) => {
+/** A collapsed leaf has no node, so its name carries the declared type for a hover. */
+const LeafNameSpan = ({ refModel }: { refModel: Model }) => (
+  <span
+    className={MODEL_NODE_CLASSES.field.modelTypeColor}
+    title={isLeafModel(refModel) ? describeLeafType(refModel) : undefined}
+  >
+    {refModel.name}
+  </span>
+);
+
+type TypeNameSpanProps = {
+  badgeHubIds: ReadonlySet<string>;
+  collapsedLeafIds: ReadonlySet<string>;
+  refModel: Model;
+};
+
+const TypeNameSpan = ({ badgeHubIds, collapsedLeafIds, refModel }: TypeNameSpanProps) => {
+  if (collapsedLeafIds.has(refModel.id)) return <LeafNameSpan refModel={refModel} />;
   if (badgeHubIds.has(refModel.id)) return <HubBadgePill key={refModel.id} refModel={refModel} />;
   return <span className={MODEL_NODE_CLASSES.field.modelTypeColor}>{refModel.name}</span>;
 };
@@ -99,10 +116,18 @@ const TYPE_TEXT_COLORS = {
   reference: MODEL_NODE_CLASSES.field.modelTypeColor,
 };
 
-const TypeText = ({ segments }: { segments: TypeTextSegment[] }) => (
+type TypeTextProps = {
+  /** The collapsed leaves this model references, by name. A reference segment to one gets the hover. */
+  leavesByName?: ReadonlyMap<string, Model>;
+  segments: TypeTextSegment[];
+};
+
+const TypeText = ({ leavesByName, segments }: TypeTextProps) => (
   <span className={MODEL_NODE_CLASSES.field.defaultTypeColor}>
     {segments.map((segment, index) => {
       if (segment.kind === "default") return segment.text;
+      const leaf = segment.kind === "reference" ? leavesByName?.get(segment.text) : undefined;
+      if (leaf) return <LeafNameSpan key={index} refModel={leaf} />;
       return (
         <span key={index} className={TYPE_TEXT_COLORS[segment.kind]}>
           {segment.text}
@@ -113,8 +138,17 @@ const TypeText = ({ segments }: { segments: TypeTextSegment[] }) => (
 );
 
 const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
-  const { model, badgeHubIds } = data;
+  const { model, badgeHubIds, collapsedLeafIds } = data;
   const decoration = useNodeDecoration(model);
+  const leavesByName = useMemo(
+    () =>
+      new Map(
+        model.dependencies
+          .filter((dependency) => collapsedLeafIds.has(dependency.id))
+          .map((dependency) => [dependency.name, dependency])
+      ),
+    [collapsedLeafIds, model.dependencies]
+  );
 
   const hasSourceHandle = useMemo(() => {
     if (model.type === "interface") {
@@ -133,7 +167,10 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
     return false;
   }, [badgeHubIds, model]);
 
-  const hasTargetHandle = useMemo(() => model.dependants.length > 0, [model.dependants]);
+  const hasTargetHandle = useMemo(
+    () => model.dependants.some((dependant) => !badgeHubIds.has(dependant.id)),
+    [badgeHubIds, model.dependants]
+  );
 
   const fieldSourceHandleRows = useMemo(() => {
     const rows = new Map<string, number>();
@@ -237,12 +274,23 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
       }
 
       if (isModelReference(field.type)) {
-        typeFragments.push(<TypeNameSpan key="reference" badgeHubIds={badgeHubIds} refModel={field.type} />);
+        typeFragments.push(
+          <TypeNameSpan
+            key="reference"
+            badgeHubIds={badgeHubIds}
+            collapsedLeafIds={collapsedLeafIds}
+            refModel={field.type}
+          />
+        );
       } else if (isArraySchemaField(field)) {
         if (isModelReference(field.elementType)) {
           typeFragments.push(
             <span key="array-reference" className={MODEL_NODE_CLASSES.field.defaultTypeColor}>
-              <TypeNameSpan badgeHubIds={badgeHubIds} refModel={field.elementType} />
+              <TypeNameSpan
+                badgeHubIds={badgeHubIds}
+                collapsedLeafIds={collapsedLeafIds}
+                refModel={field.elementType}
+              />
               []
             </span>
           );
@@ -252,7 +300,7 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
           typeFragments.push(
             <span key="array-primitive" className={MODEL_NODE_CLASSES.field.defaultTypeColor}>
               {needsParens && "("}
-              <TypeText segments={model.typeTextSegments[elementText]} />
+              <TypeText leavesByName={leavesByName} segments={model.typeTextSegments[elementText]} />
               {needsParens && ")"}
               []
             </span>
@@ -269,18 +317,27 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
 
           if (isModelReference(argument)) {
             argumentFragments.push(
-              <TypeNameSpan key={argumentKey} badgeHubIds={badgeHubIds} refModel={argument} />
+              <TypeNameSpan
+                key={argumentKey}
+                badgeHubIds={badgeHubIds}
+                collapsedLeafIds={collapsedLeafIds}
+                refModel={argument}
+              />
             );
           } else {
             argumentFragments.push(
-              <TypeText key={argumentKey} segments={model.typeTextSegments[argument]} />
+              <TypeText
+                key={argumentKey}
+                leavesByName={leavesByName}
+                segments={model.typeTextSegments[argument]}
+              />
             );
           }
         }
 
         typeFragments.push(
           <span key="prefix" className={MODEL_NODE_CLASSES.field.defaultTypeColor}>
-            <TypeText segments={model.typeTextSegments[field.genericName]} />
+            <TypeText leavesByName={leavesByName} segments={model.typeTextSegments[field.genericName]} />
             {"<"}
           </span>,
           <span key="generic" className={MODEL_NODE_CLASSES.field.defaultTypeColor}>
@@ -313,7 +370,11 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
               <span key={argumentKey}>
                 {argument.name}
                 <span className={MODEL_NODE_CLASSES.field.defaultTypeColor}>: </span>
-                <TypeNameSpan badgeHubIds={badgeHubIds} refModel={argument.type} />
+                <TypeNameSpan
+                  badgeHubIds={badgeHubIds}
+                  collapsedLeafIds={collapsedLeafIds}
+                  refModel={argument.type}
+                />
               </span>
             );
           } else {
@@ -321,7 +382,7 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
               <span key={argumentKey}>
                 {argument.name}
                 <span className={MODEL_NODE_CLASSES.field.defaultTypeColor}>: </span>
-                <TypeText segments={model.typeTextSegments[argument.type]} />
+                <TypeText leavesByName={leavesByName} segments={model.typeTextSegments[argument.type]} />
               </span>
             );
           }
@@ -357,25 +418,38 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
           if (isModelReference(returnType)) {
             typeFragments.push(
               <span key={returnTypeKey} className={MODEL_NODE_CLASSES.field.defaultTypeColor}>
-                <TypeNameSpan badgeHubIds={badgeHubIds} refModel={returnType} />
+                <TypeNameSpan
+                  badgeHubIds={badgeHubIds}
+                  collapsedLeafIds={collapsedLeafIds}
+                  refModel={returnType}
+                />
                 []
               </span>
             );
           } else {
             typeFragments.push(
               <span key={returnTypeKey} className={MODEL_NODE_CLASSES.field.defaultTypeColor}>
-                <TypeText segments={model.typeTextSegments[returnType]} />
+                <TypeText leavesByName={leavesByName} segments={model.typeTextSegments[returnType]} />
                 []
               </span>
             );
           }
         } else if (isModelReference(field.returnType)) {
           typeFragments.push(
-            <TypeNameSpan key={returnTypeKey} badgeHubIds={badgeHubIds} refModel={field.returnType} />
+            <TypeNameSpan
+              key={returnTypeKey}
+              badgeHubIds={badgeHubIds}
+              collapsedLeafIds={collapsedLeafIds}
+              refModel={field.returnType}
+            />
           );
         } else {
           typeFragments.push(
-            <TypeText key={returnTypeKey} segments={model.typeTextSegments[field.returnType]} />
+            <TypeText
+              key={returnTypeKey}
+              leavesByName={leavesByName}
+              segments={model.typeTextSegments[field.returnType]}
+            />
           );
         }
       } else if (isUnionSchemaField(field)) {
@@ -386,9 +460,18 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
           const typeKey = `${model.id}-${field.name}-${isModelReference(type) ? type.name : type}-${i}`;
 
           if (isModelReference(type)) {
-            unionFragments.push(<TypeNameSpan key={typeKey} badgeHubIds={badgeHubIds} refModel={type} />);
+            unionFragments.push(
+              <TypeNameSpan
+                key={typeKey}
+                badgeHubIds={badgeHubIds}
+                collapsedLeafIds={collapsedLeafIds}
+                refModel={type}
+              />
+            );
           } else {
-            unionFragments.push(<TypeText key={typeKey} segments={model.typeTextSegments[type]} />);
+            unionFragments.push(
+              <TypeText key={typeKey} leavesByName={leavesByName} segments={model.typeTextSegments[type]} />
+            );
           }
         }
 
@@ -404,7 +487,11 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
         );
       } else {
         typeFragments.push(
-          <TypeText key={`${model.id}-${field.name}-type`} segments={model.typeTextSegments[field.type]} />
+          <TypeText
+            key={`${model.id}-${field.name}-type`}
+            leavesByName={leavesByName}
+            segments={model.typeTextSegments[field.type]}
+          />
         );
       }
 
@@ -426,7 +513,7 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
         </tr>
       );
     });
-  }, [badgeHubIds, fieldSourceHandleRows, model.id, model.schema]);
+  }, [badgeHubIds, collapsedLeafIds, fieldSourceHandleRows, leavesByName, model.id, model.schema]);
 
   const modelName = useMemo(() => {
     const nameParts = [model.name];

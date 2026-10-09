@@ -7,6 +7,7 @@ import {
   extractModelEdges,
   fieldHasSourceEdge,
   ModelNodeState,
+  selectCollapsedLeafIds,
   selectFunctionsView,
 } from "./layout";
 
@@ -15,6 +16,7 @@ const NO_PINS: ReadonlySet<string> = new Set();
 const makeNode = (id: string, x: number, y: number, width: number, height: number): ModelNodeState => ({
   data: {
     badgeHubIds: new Set<string>(),
+    collapsedLeafIds: new Set<string>(),
     model: {
       id,
       name: id,
@@ -259,6 +261,52 @@ describe("buildSectionNodes", () => {
     expect(boundary.position).toEqual({ x: 76, y: 60 });
     expect(boundary.width).toBe(448);
     expect(boundary.height).toBe(364);
+  });
+});
+
+describe("selectCollapsedLeafIds", () => {
+  const leafIds = (source: string) => [...selectCollapsedLeafIds(new ModelParser(source).getModels())];
+
+  it("collapses a branded id that 1 interface references", () => {
+    expect(
+      leafIds(`
+        declare const brand: unique symbol;
+        type Brand<T, Name extends string> = T & { readonly [brand]: Name };
+        type EmployeeId = Brand<string, "EmployeeId">;
+        interface Employee { id: EmployeeId }
+      `)
+    ).toEqual(["EmployeeId"]);
+  });
+
+  it("collapses a union of 2 literal strings", () => {
+    expect(leafIds(`type Mode = "dry" | "real";\ninterface Run { mode: Mode }`)).toEqual(["Mode"]);
+  });
+
+  it("does not collapse an interface", () => {
+    expect(leafIds(`interface Id { value: string }\ninterface Employee { id: Id }`)).toEqual([]);
+  });
+
+  it("does not collapse an alias that references another model", () => {
+    expect(
+      leafIds(`
+        type Instant = string;
+        type Stamp = Instant | null;
+        interface Run { at: Stamp }
+      `)
+    ).toEqual(["Instant"]);
+  });
+
+  it("does not collapse a union of object types", () => {
+    expect(
+      leafIds(`
+        type Failure = { readonly kind: "timeout" } | { readonly kind: "dns"; readonly host: string };
+        interface Run { failure: Failure | null }
+      `)
+    ).toEqual([]);
+  });
+
+  it("does not collapse an unreferenced leaf", () => {
+    expect(leafIds(`type Lonely = string;`)).toEqual([]);
   });
 });
 

@@ -55,6 +55,7 @@ import {
   ModelNodeState,
   normalizeLayoutEdges,
   RendererNodeState,
+  selectCollapsedLeafIds,
   selectFunctionsView,
   shouldResetLayoutAnchors,
 } from "./layout";
@@ -123,14 +124,22 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
   useEffect(() => {
     previousBadgeHubIdsRef.current = { documentId, ids: hubIds };
   }, [hubIds, documentId]);
-  // a model outside the view is treated like a badge hub: no node, no edges, and
-  // a pill where a visible node refers to it
+  const collapsedLeafIds = useMemo(
+    () => (options.renderer.collapseLeaves ? selectCollapsedLeafIds(models) : EMPTY_BADGE_HUB_IDS),
+    [models, options.renderer.collapseLeaves]
+  );
+  // a collapsed leaf and a model outside the view are treated like a badge hub: no
+  // node, no edges, and inline text or a pill where a visible node refers to it
   const isFunctionsView = options.renderer.view === "functions";
   const badgeHubIds = useMemo(() => {
-    if (!isFunctionsView) return hubIds;
-    const visible = new Set(selectFunctionsView(models));
-    return new Set([...hubIds, ...models.filter((model) => !visible.has(model)).map((model) => model.id)]);
-  }, [hubIds, isFunctionsView, models]);
+    if (!isFunctionsView && collapsedLeafIds.size === 0) return hubIds;
+    const visible = new Set(isFunctionsView ? selectFunctionsView(models) : models);
+    return new Set([
+      ...hubIds,
+      ...collapsedLeafIds,
+      ...models.filter((model) => !visible.has(model)).map((model) => model.id),
+    ]);
+  }, [collapsedLeafIds, hubIds, isFunctionsView, models]);
   const panelRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAnimate, setShouldAnimate] = useState(false);
@@ -168,7 +177,10 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     };
   }, [sharedEdgeProps]);
 
-  const parsedNodes = useMemo(() => extractModelNodes(models, badgeHubIds), [models, badgeHubIds]);
+  const parsedNodes = useMemo(
+    () => extractModelNodes(models, badgeHubIds, collapsedLeafIds),
+    [models, badgeHubIds, collapsedLeafIds]
+  );
   const modelEdges = useMemo(() => extractModelEdges(models, badgeHubIds), [models, badgeHubIds]);
   // the functions view orders the functions along the main axis instead of grouping by section
   const sectionGroups = useMemo(
@@ -376,7 +388,8 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
         hitCachedNodeSet.add(cachedNode);
         if (
           cachedNode.data.model === node.data.model &&
-          cachedNode.data.badgeHubIds === node.data.badgeHubIds
+          cachedNode.data.badgeHubIds === node.data.badgeHubIds &&
+          cachedNode.data.collapsedLeafIds === node.data.collapsedLeafIds
         ) {
           return cachedNode;
         }
