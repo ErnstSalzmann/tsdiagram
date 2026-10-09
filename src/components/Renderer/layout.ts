@@ -526,9 +526,17 @@ export const getLayoutPreset = (manuallyMovedNodesSet: Set<string>): LayoutPrese
 
 const NO_PINNED_IDS: ReadonlySet<string> = new Set();
 
-/** Room inside a section box: the title needs the top. The drawn boundary uses the same padding. */
+/** The title band of a section box: 8 px from the top, a 16 px line, and 8 px of clearance. */
+const SECTION_TITLE_BAND_PX = 8 + 16 + 8;
+/** Room inside a section box. The drawn boundary uses the same padding as the elk compound node. */
 const SECTION_PAD_PX = 24;
-const SECTION_TITLE_PAD_PX = 40;
+const SECTION_TITLE_PAD_PX = SECTION_TITLE_BAND_PX + 8;
+/** Section boxes sit farther apart than the members inside them, so 2 boxes never touch. */
+const SECTION_SPACING: LayoutOptions = {
+  "elk.layered.spacing.nodeNodeBetweenLayers": "120",
+  "elk.spacing.nodeNode": "96",
+};
+const MEMBER_SPACING_KEYS = ["elk.layered.spacing.nodeNodeBetweenLayers", "elk.spacing.nodeNode"] as const;
 
 export const layoutModelNodes = async ({
   compact,
@@ -542,11 +550,17 @@ export const layoutModelNodes = async ({
 }: LayoutModelNodesArgs): Promise<ModelNodeState[]> => {
   const resolvedPreset = preset ?? getLayoutPreset(manuallyMovedNodesSet);
   // partitions and groups order the whole graph, so the components must share one layout
+  const baseOptions = getLayoutOptions(direction, resolvedPreset);
   const elkOptions: LayoutOptions = {
-    ...getLayoutOptions(direction, resolvedPreset),
+    ...baseOptions,
     ...(partitions ? { "elk.partitioning.activate": "true" } : {}),
-    ...(groups ? { "elk.hierarchyHandling": "INCLUDE_CHILDREN" } : {}),
+    ...(groups ? { "elk.hierarchyHandling": "INCLUDE_CHILDREN", ...SECTION_SPACING } : {}),
     ...(partitions || groups ? { "elk.separateConnectedComponents": "false" } : {}),
+  };
+  // the root spacing applies between sections; the members keep the base spacing
+  const groupLayoutOptions: LayoutOptions = {
+    "elk.padding": `[top=${SECTION_TITLE_PAD_PX},left=${SECTION_PAD_PX},bottom=${SECTION_PAD_PX},right=${SECTION_PAD_PX}]`,
+    ...Object.fromEntries(MEMBER_SPACING_KEYS.map((key) => [key, baseOptions[key]])),
   };
 
   // a pinned node inside a group is pinned relative to the group, so the group
@@ -614,9 +628,7 @@ export const layoutModelNodes = async ({
       children.push({
         children: members,
         id: `group:${groupId}`,
-        layoutOptions: {
-          "elk.padding": `[top=${SECTION_TITLE_PAD_PX},left=${SECTION_PAD_PX},bottom=${SECTION_PAD_PX},right=${SECTION_PAD_PX}]`,
-        },
+        layoutOptions: groupLayoutOptions,
         ...(origin ? { x: origin.x, y: origin.y } : {}),
       });
     }
