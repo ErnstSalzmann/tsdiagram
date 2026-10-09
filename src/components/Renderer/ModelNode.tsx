@@ -245,7 +245,9 @@ const FunctionStack = ({ context, field }: { context: FieldContext; field: Funct
 const findDiscriminant = (objects: InlineObjectMember[]): string | null => {
   if (objects.length < 2) return null;
   const isLiteralMember = (member: SchemaField) =>
-    isDefaultSchemaField(member) && typeof member.type === "string" && /^["']/.test(member.type);
+    isDefaultSchemaField(member) &&
+    typeof member.type === "string" &&
+    /^(["']|true$|false$|-?\d)/.test(member.type);
   const [first] = objects;
   for (const candidate of first.members) {
     if (!isLiteralMember(candidate)) continue;
