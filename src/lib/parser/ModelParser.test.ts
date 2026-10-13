@@ -3381,8 +3381,9 @@ it("renders Readonly<{ ... }> as the inline object that it wraps", () => {
 
 it("does not unwrap a user type named Readonly", () => {
   const parser = new ModelParser(`
-    type Readonly<T> = { value: T };
-    type Box = { item: Readonly<{ id: string }> };
+    // a module, so the local type shadows the global library type
+    export type Readonly<T> = { value: T };
+    export type Box = { item: Readonly<{ id: string }> };
   `);
   const box = parser.getModels().find((m) => m.name === "Box");
   const item = box!.schema.find((field) => field.name === "item");
