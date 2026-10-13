@@ -269,10 +269,26 @@ const isPropNode = (node: Node): node is Exclude<Prop, SynthesizedProperty> =>
   Node.isSetAccessorDeclaration(node);
 
 /**
+ * `Readonly<{ ... }>` reads like the object literal that it wraps. Code in the
+ * functional style wraps nearly every type this way, so without this the
+ * literal renders as 1 long text instead of a nested box.
+ */
+const unwrapReadonly = (type: Type): Type => {
+  const alias = type.getAliasSymbol();
+  if (alias?.getName() !== "Readonly") return type;
+  // only the library type; a user type named Readonly keeps its meaning
+  if (!alias.getDeclarations().every((declaration) => declaration.getSourceFile().isDeclarationFile()))
+    return type;
+  const [inner] = type.getAliasTypeArguments();
+  return inner ?? type;
+};
+
+/**
  * An object literal type that is not an alias, not callable, and not a `typeof` query.
  * The type checker keeps the `TypeLiteral` declaration on instantiated literals too.
  */
-const isObjectLiteralType = (type: Type) => {
+const isObjectLiteralType = (wrapped: Type) => {
+  const type = unwrapReadonly(wrapped);
   if (!type.isObject() || !type.isAnonymous() || type.getAliasSymbol()) return false;
   if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0) return false;
   if (type.getProperties().length === 0) return false;
@@ -718,7 +734,8 @@ export class ModelParser extends Parser {
       const isInlineObjectType = (type: Type) =>
         inlineObjectDepth < MAX_INLINE_OBJECT_DEPTH && isObjectLiteralType(type);
 
-      const buildInlineObjectMembers = (type: Type, typeLocation: Node): SchemaField[] => {
+      const buildInlineObjectMembers = (wrapped: Type, typeLocation: Node): SchemaField[] => {
+        const type = unwrapReadonly(wrapped);
         const members: SchemaField[] = [];
         const previousTarget = schemaTarget;
         schemaTarget = members;
@@ -1018,6 +1035,8 @@ export class ModelParser extends Parser {
       const addGenericProp = (prop: Prop, type?: Type) => {
         const propName = sanitizePropertyName(prop.getName());
         const propType = getDeclaredPropType(prop, type);
+        // `Readonly<{ ... }>` is an inline object, not a generic reference
+        if (isObjectLiteralType(propType)) return false;
 
         const aliasSymbol = propType.getAliasSymbol();
         const symbol = aliasSymbol ?? propType.getSymbol();
@@ -1090,6 +1109,7 @@ export class ModelParser extends Parser {
 
       /** The union members as written. Undefined when a flattened alias cannot be told apart. */
       const getUnionMemberTypes = (type: Type, typeNode?: TypeNode): Type[] | undefined => {
+        if (unwrapReadonly(type) !== type) return [type];
         if (type.getAliasSymbol()) return undefined;
         if (typeNode) return getDeclaredMemberTypes(typeNode);
         if (!type.isUnion()) return [type];

@@ -3348,3 +3348,44 @@ it("draws a named function type as a function, not as a type alias", () => {
   expect(models.find((m) => m.name === "Flag")?.type).toBe("typeAlias");
   expect(models.filter((m) => m.name === "Diff")).toHaveLength(1);
 });
+
+it("renders Readonly<{ ... }> as the inline object that it wraps", () => {
+  const parser = new ModelParser(`
+    type RoleId = string & { readonly __brand: "RoleId" };
+    type Action =
+      | Readonly<{ kind: "renameRole"; roleId: RoleId; name: string }>
+      | Readonly<{ kind: "deleteRole"; roleId: RoleId }>;
+    type Plan = Readonly<{
+      owner: Readonly<{ id: string; name: string }>;
+      fallback: Readonly<{ id: string }> | null;
+    }>;
+  `);
+
+  const models = parser.getModels();
+  const action = models.find((m) => m.name === "Action");
+  const [unionRow] = action!.schema;
+  if (!isUnionSchemaField(unionRow)) throw new Error("expected a union row");
+  const objects = unionRow.types.filter(isInlineObjectMember);
+  expect(objects).toHaveLength(2);
+  expect(objects[0].members.map((member) => member.name)).toEqual(["kind", "roleId", "name"]);
+  expect(objects[1].members.map((member) => member.name)).toEqual(["kind", "roleId"]);
+
+  const plan = models.find((m) => m.name === "Plan");
+  const owner = plan!.schema.find((field) => field.name === "owner");
+  const fallback = plan!.schema.find((field) => field.name === "fallback");
+  if (!owner || !isObjectSchemaField(owner)) throw new Error("expected owner as an object field");
+  expect(owner.members.map((member) => member.name)).toEqual(["id", "name"]);
+  if (!fallback || !isObjectSchemaField(fallback)) throw new Error("expected fallback as an object field");
+  expect(fallback.nullable).toBe(true);
+});
+
+it("does not unwrap a user type named Readonly", () => {
+  const parser = new ModelParser(`
+    type Readonly<T> = { value: T };
+    type Box = { item: Readonly<{ id: string }> };
+  `);
+  const box = parser.getModels().find((m) => m.name === "Box");
+  const item = box!.schema.find((field) => field.name === "item");
+  // the user type keeps its own shape: a "value" member, not the wrapped "id"
+  if (item && isObjectSchemaField(item)) expect(item.members.map((member) => member.name)).toEqual(["value"]);
+});
