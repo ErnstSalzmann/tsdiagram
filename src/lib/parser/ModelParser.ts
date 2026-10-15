@@ -273,7 +273,10 @@ const isPropNode = (node: Node): node is Exclude<Prop, SynthesizedProperty> =>
  * functional style wraps nearly every type this way, so without this the
  * literal renders as 1 long text instead of a nested box.
  */
-const unwrapReadonly = (type: Type): Type => {
+const unwrapReadonly = (type: Type, namedTypes?: ReadonlySet<ts.Type>): Type => {
+  // `type Repository = Readonly<{ ... }>` keeps the alias Readonly in the checker;
+  // a reference to it is a named type, not a literal written in place
+  if (namedTypes?.has(type.compilerType)) return type;
   const alias = type.getAliasSymbol();
   if (alias?.getName() !== "Readonly") return type;
   // only the library type; a user type named Readonly keeps its meaning
@@ -287,8 +290,8 @@ const unwrapReadonly = (type: Type): Type => {
  * An object literal type that is not an alias, not callable, and not a `typeof` query.
  * The type checker keeps the `TypeLiteral` declaration on instantiated literals too.
  */
-const isObjectLiteralType = (wrapped: Type) => {
-  const type = unwrapReadonly(wrapped);
+const isObjectLiteralType = (wrapped: Type, namedTypes?: ReadonlySet<ts.Type>) => {
+  const type = unwrapReadonly(wrapped, namedTypes);
   if (!type.isObject() || !type.isAnonymous() || type.getAliasSymbol()) return false;
   if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0) return false;
   if (type.getProperties().length === 0) return false;
@@ -379,6 +382,9 @@ export class ModelParser extends Parser {
         if (model) return model;
       }
     };
+
+    // the types of the declared aliases: a reference to one of them is named, never inlined
+    const namedAliasTypes = new Set(this.typeAliases.map((alias) => alias.type.compilerType));
 
     // first pass: build nodes and models
     const items: ((
@@ -732,10 +738,10 @@ export class ModelParser extends Parser {
       let inlineObjectDepth = 0;
 
       const isInlineObjectType = (type: Type) =>
-        inlineObjectDepth < MAX_INLINE_OBJECT_DEPTH && isObjectLiteralType(type);
+        inlineObjectDepth < MAX_INLINE_OBJECT_DEPTH && isObjectLiteralType(type, namedAliasTypes);
 
       const buildInlineObjectMembers = (wrapped: Type, typeLocation: Node): SchemaField[] => {
-        const type = unwrapReadonly(wrapped);
+        const type = unwrapReadonly(wrapped, namedAliasTypes);
         const members: SchemaField[] = [];
         const previousTarget = schemaTarget;
         schemaTarget = members;
@@ -1036,7 +1042,7 @@ export class ModelParser extends Parser {
         const propName = sanitizePropertyName(prop.getName());
         const propType = getDeclaredPropType(prop, type);
         // `Readonly<{ ... }>` is an inline object, not a generic reference
-        if (isObjectLiteralType(propType)) return false;
+        if (isObjectLiteralType(propType, namedAliasTypes)) return false;
 
         const aliasSymbol = propType.getAliasSymbol();
         const symbol = aliasSymbol ?? propType.getSymbol();
@@ -1046,6 +1052,38 @@ export class ModelParser extends Parser {
         const typeNodeArguments = typeNode?.isKind(ts.SyntaxKind.TypeReference)
           ? typeNode.getTypeArguments()
           : [];
+
+        // A field written as a plain name, like `repository: Repository`, links to that
+        // model even when the checker sees the alias `Readonly<...>` behind the name. A
+        // member of a mapped type has no type node; its original declaration has one.
+        const writtenTypeNode =
+          typeNode ??
+          ("typeLocation" in prop
+            ? prop.getSymbol().getDeclarations().find(Node.isPropertySignature)?.getTypeNode()
+            : undefined);
+        // a mapped type can change the member type, so the written name counts only when it still is the type
+        if (
+          writtenTypeNode?.isKind(ts.SyntaxKind.TypeReference) &&
+          writtenTypeNode.getTypeArguments().length === 0 &&
+          writtenTypeNode.getType().compilerType === propType.compilerType
+        ) {
+          const writtenModel = resolveExactModelReference(
+            trimImport(writtenTypeNode.getText()),
+            item.name,
+            propType
+          );
+          if (writtenModel) {
+            dependencies.add(writtenModel);
+            const modifiers = getPropModifiers(prop);
+            schemaTarget.push({
+              name: propName,
+              type: writtenModel,
+              optional: hasQuestionToken(prop),
+              ...(modifiers.length > 0 ? { modifiers } : {}),
+            });
+            return true;
+          }
+        }
 
         if (symbol && typeArguments.length > 0) {
           const genericName = symbol.getName();
@@ -1109,7 +1147,7 @@ export class ModelParser extends Parser {
 
       /** The union members as written. Undefined when a flattened alias cannot be told apart. */
       const getUnionMemberTypes = (type: Type, typeNode?: TypeNode): Type[] | undefined => {
-        if (unwrapReadonly(type) !== type) return [type];
+        if (unwrapReadonly(type, namedAliasTypes) !== type) return [type];
         if (type.getAliasSymbol()) return undefined;
         if (typeNode) return getDeclaredMemberTypes(typeNode);
         if (!type.isUnion()) return [type];

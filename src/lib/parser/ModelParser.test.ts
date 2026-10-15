@@ -3390,3 +3390,19 @@ it("does not unwrap a user type named Readonly", () => {
   // the user type keeps its own shape: a "value" member, not the wrapped "id"
   if (item && isObjectSchemaField(item)) expect(item.members.map((member) => member.name)).toEqual(["value"]);
 });
+
+it("links a field to a named alias of Readonly instead of expanding it", () => {
+  const parser = new ModelParser(`
+    type Repository = Readonly<{ createRole: (name: string) => Promise<string>; deleteRole: (id: string) => Promise<void> }>;
+    type Ports = Readonly<{ repository: Repository; inline: Readonly<{ id: string }> }>;
+  `);
+
+  const models = parser.getModels();
+  const repository = models.find((m) => m.name === "Repository");
+  const ports = models.find((m) => m.name === "Ports");
+  const field = ports!.schema.find((f) => f.name === "repository");
+  const inline = ports!.schema.find((f) => f.name === "inline");
+  expect(field?.type).toBe(repository);
+  expect(inline && isObjectSchemaField(inline)).toBe(true);
+  expect(ports!.dependencies.map((m) => m.name)).toContain("Repository");
+});
