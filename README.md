@@ -59,4 +59,25 @@ node bin/tsdiagram-export.mjs src/domain docs/domain.svg --png --view functions 
 node bin/tsdiagram-export.mjs src/domain/ids.ts src/domain/plan.ts --png
 ```
 
-Options: `--view functions` renders only the functions and the types they use, `--direction vertical` lays the diagram out top to bottom (both become `?view=` and `?direction=` query parameters, which the app applies over the stored options), `--png` also writes `<output>.png`, `--scale 2` sets the PNG resolution and `--max-side 4096` caps its longer side (Chrome paints only part of a larger page), `--url` is where the app runs (default `http://localhost:5173`), `--chrome <path>` or `CHROME=` points at the browser, `--timeout 60` is the wait in seconds, `--verbose` logs each step. It needs Node 22 or later and Google Chrome or Chromium. No other dependency.
+Options: `--view functions` renders only the functions and the types they use, `--direction vertical` lays the diagram out top to bottom, `--focus planSync,SyncPlan` and `--depth 1` show a focus view, see below. These 4 options become the `?view=`, `?direction=`, `?focus=`, and `?depth=` query parameters, which the app applies over the stored options. `--png` also writes `<output>.png`, `--scale 2` sets the PNG resolution and `--max-side 4096` caps its longer side (Chrome paints only part of a larger page), `--url` is where the app runs (default `http://localhost:5173`), `--chrome <path>` or `CHROME=` points at the browser, `--timeout 60` is the wait in seconds, `--verbose` logs each step. It needs Node 22 or later and Google Chrome or Chromium. No other dependency.
+
+## Focus view
+
+A focus view shows 1 part of a model. Open the app with `?focus=<ModelName>` and an optional `&depth=<n>`. The default depth is 1. The diagram shows the focused model, every model within `depth` hops through its dependencies or dependants, and the edges between them. The other models get no node and no edge. A visible node shows them as pills, as in the functions view.
+
+- Give several names with commas: `?focus=planSync,SyncPlan`. The view is the union.
+- If a name has no model, the renderer shows a notice and the full diagram.
+- With `view=functions`, the app applies the functions view first, then the focus.
+- In Preferences, set "Focus on" and "Depth". Alt-click the header of a node to focus on it. The "Focus" chip above the diagram clears the focus.
+
+```sh
+node bin/tsdiagram-export.mjs src/domain docs/plan-sync.svg --png --focus planSync --depth 1
+```
+
+A redirect page such as `public/open-<id>.html` is static, so the app cannot read its query string. The page must forward its query string to the app. Use this script in the page:
+
+```js
+location.replace("/?doc=<id>" + location.search.replace(/^\?/, "&") + "#/<state>");
+```
+
+Then `/open-<id>.html?focus=planSync&depth=2` opens the document with that focus.

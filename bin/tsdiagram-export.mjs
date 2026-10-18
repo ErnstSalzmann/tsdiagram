@@ -2,7 +2,7 @@
 // Export TypeScript files to SVG (and PNG) from the command line.
 //
 // Usage: tsdiagram-export <input...> [output.svg] [--png] [--scale 2] [--max-side 4096]
-//          [--view all|functions] [--direction horizontal|vertical]
+//          [--view all|functions] [--direction horizontal|vertical] [--focus <names>] [--depth 1]
 //          [--url http://localhost:5173] [--chrome <path>] [--timeout 60] [--verbose]
 //
 // The input is 1 or more `.ts` files, or a folder. Several files are bundled
@@ -52,6 +52,8 @@ const parseArgs = (argv) => {
     else if (argument === "--timeout") options.timeout = Number(argv[++index]);
     else if (argument === "--view") options.view = argv[++index];
     else if (argument === "--direction") options.direction = argv[++index];
+    else if (argument === "--focus") options.focus = argv[++index];
+    else if (argument === "--depth") options.depth = argv[++index];
     else if (argument === "--help" || argument === "-h") options.help = true;
     else if (argument === "--verbose") options.verbose = true;
     else positional.push(argument);
@@ -227,7 +229,7 @@ const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.help || options.inputs.length === 0) {
     console.log(
-      "Usage: tsdiagram-export <input...> [output.svg] [--png] [--scale 2] [--view all|functions] [--direction horizontal|vertical] [--url http://localhost:5173] [--chrome <path>] [--timeout 60]"
+      "Usage: tsdiagram-export <input...> [output.svg] [--png] [--scale 2] [--view all|functions] [--direction horizontal|vertical] [--focus <names>] [--depth 1] [--url http://localhost:5173] [--chrome <path>] [--timeout 60]"
     );
     process.exit(options.help ? 0 : 1);
   }
@@ -245,6 +247,8 @@ const main = async () => {
   const pageUrl = buildShareUrl(options.url, source, title, {
     direction: options.direction,
     view: options.view,
+    focus: options.focus,
+    depth: options.depth,
   });
   const svg = await exportSvg({ chrome, pageUrl, timeout: options.timeout });
   await writeFile(options.output, svg);
