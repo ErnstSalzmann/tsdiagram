@@ -1,4 +1,4 @@
-import { memo, ReactNode, useEffect, useId, useMemo, useRef } from "react";
+import { memo, ReactNode, useCallback, useEffect, useId, useMemo, useRef } from "react";
 import { Handle, Position, useUpdateNodeInternals } from "@xyflow/react";
 import classNames from "classnames";
 import {
@@ -17,6 +17,7 @@ import {
   UnionSchemaField,
 } from "../../lib/parser/model-types";
 import { graphStore, useIsBadgeHubHovered, useNodeDecoration } from "../../stores/graph";
+import { optionsStore } from "../../stores/user-options";
 import { describeLeafType, fieldHasSourceEdge, getTypeAliasHeaderDependencies, isLeafModel } from "./layout";
 import { usePortColor } from "./port-colors";
 
@@ -618,9 +619,20 @@ const ModelNodeContent = ({ id, data }: ModelNodeProps) => {
     return nameParts.join("");
   }, [model]);
 
+  // an Alt click on the header focuses the diagram on this model
+  const handleHeaderClick = useCallback(
+    (event: React.MouseEvent) => {
+      if (!event.altKey) return;
+      optionsStore.state.renderer.focus = model.name;
+      optionsStore.state.renderer.autoFitView = true;
+      optionsStore.state.save();
+    },
+    [model.name]
+  );
+
   return (
     <div key={id} className={headerClasses.root}>
-      <div className={headerClasses.header}>
+      <div className={headerClasses.header} onClick={handleHeaderClick}>
         {hasTargetHandle && (
           <Handle id={`${model.id}-target`} position={Position.Left} type="target">
             <TargetPort portId={`${model.id}-target`} />

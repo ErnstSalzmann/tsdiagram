@@ -64,6 +64,26 @@ export const Preferences = ({ isOpen, onClose }: PreferencesProps) => {
     optionsStore.state.save();
   };
 
+  // the focus is applied on blur or Enter, so a partial name does not change the diagram
+  const commitFocus = (event: React.SyntheticEvent<HTMLInputElement>) => {
+    const focus = event.currentTarget.value.trim();
+    if (focus === optionsStore.state.renderer.focus) return;
+    // re-enable auto-fit so the relayout this triggers is brought into view
+    optionsStore.state.renderer.autoFitView = true;
+    optionsStore.state.renderer.focus = focus;
+    optionsStore.state.save();
+  };
+
+  const handleFocusKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") commitFocus(event);
+  };
+
+  const handleFocusDepthChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    optionsStore.state.renderer.autoFitView = true;
+    optionsStore.state.renderer.focusDepth = Number(event.target.value);
+    optionsStore.state.save();
+  };
+
   const handlePanelSplitDirectionChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     optionsStore.state.panels.splitDirection = event.target.value as "horizontal" | "vertical";
     optionsStore.state.save();
@@ -167,6 +187,44 @@ export const Preferences = ({ isOpen, onClose }: PreferencesProps) => {
                         <option value="functions">Functions and their types</option>
                       </select>
                     </div>
+
+                    <div className="flex gap-2">
+                      <div className="field-group flex-1">
+                        <label className="field-label" htmlFor="renderer-focus">
+                          Focus on
+                        </label>
+                        <input
+                          key={options.renderer.focus}
+                          className="field-control"
+                          defaultValue={options.renderer.focus}
+                          id="renderer-focus"
+                          placeholder="Model names, comma-separated"
+                          type="text"
+                          onBlur={commitFocus}
+                          onKeyDown={handleFocusKeyDown}
+                        />
+                      </div>
+                      <div className="field-group w-20">
+                        <label className="field-label" htmlFor="renderer-focus-depth">
+                          Depth
+                        </label>
+                        <select
+                          className="field-control"
+                          id="renderer-focus-depth"
+                          value={options.renderer.focusDepth}
+                          onChange={handleFocusDepthChange}
+                        >
+                          {[0, 1, 2, 3].map((depth) => (
+                            <option key={depth} value={depth}>
+                              {depth}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <p className="text-ui text-text-muted">
+                      Tip: Alt-click the header of a node to focus on it.
+                    </p>
 
                     {!isMobile && (
                       <div className="check-row">

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ComponentNoneIcon,
+  Cross2Icon,
   EnterFullScreenIcon,
   ExitFullScreenIcon,
   HeightIcon,
@@ -55,8 +56,10 @@ import {
   ModelEdge,
   ModelNodeState,
   normalizeLayoutEdges,
+  parseFocusNames,
   RendererNodeState,
   selectCollapsedLeafIds,
+  selectFocusView,
   selectFunctionsView,
   selectSectionMembers,
   shouldResetLayoutAnchors,
@@ -154,18 +157,25 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     () => (options.renderer.collapseLeaves ? selectCollapsedLeafIds(models) : EMPTY_BADGE_HUB_IDS),
     [models, options.renderer.collapseLeaves]
   );
+  // the focus applies after the functions view, so it walks only the models of that view
+  const isFunctionsView = options.renderer.view === "functions";
+  const focusNames = useMemo(() => parseFocusNames(options.renderer.focus), [options.renderer.focus]);
+  const view = useMemo(() => {
+    const viewModels = isFunctionsView ? selectFunctionsView(models) : models;
+    if (focusNames.length === 0) return { status: "focused" as const, models: viewModels };
+    return selectFocusView(viewModels, focusNames, options.renderer.focusDepth);
+  }, [focusNames, isFunctionsView, models, options.renderer.focusDepth]);
   // a collapsed leaf and a model outside the view are treated like a badge hub: no
   // node, no edges, and inline text or a pill where a visible node refers to it
-  const isFunctionsView = options.renderer.view === "functions";
   const badgeHubIds = useMemo(() => {
-    if (!isFunctionsView && collapsedLeafIds.size === 0) return hubIds;
-    const visible = new Set(isFunctionsView ? selectFunctionsView(models) : models);
+    if (view.models.length === models.length && collapsedLeafIds.size === 0) return hubIds;
+    const visible = new Set(view.models);
     return new Set([
       ...hubIds,
       ...collapsedLeafIds,
       ...models.filter((model) => !visible.has(model)).map((model) => model.id),
     ]);
-  }, [collapsedLeafIds, hubIds, isFunctionsView, models]);
+  }, [collapsedLeafIds, hubIds, models, view.models]);
   const panelRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAnimate, setShouldAnimate] = useState(false);
@@ -557,6 +567,12 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
     handleAutoLayout();
   }, [handleAutoLayout, options]);
 
+  const handleClearFocus = useCallback(() => {
+    options.renderer.focus = "";
+    options.renderer.autoFitView = true;
+    options.save();
+  }, [options]);
+
   const handleMouseDown = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (event.target && panelRef.current?.contains(event.target as HTMLElement)) return;
@@ -723,7 +739,27 @@ export const Renderer = memo(({ documentId, models, isParsing, disableMiniMap }:
                   <span>Orientation:</span>{" "}
                   {options.renderer.direction === "vertical" ? <HeightIcon /> : <WidthIcon />}
                 </button>
+
+                {focusNames.length > 0 && (
+                  <>
+                    <span className="h-4 w-px bg-border" />
+                    <button
+                      aria-label="Clear focus"
+                      className="flex h-7 items-center gap-1.5 rounded-control bg-selection px-2 text-ui font-medium text-text transition-[color,background-color] duration-(--duration-hover) ease-out hover:bg-selection-hover active:duration-(--duration-instant) [&_svg]:size-3.5"
+                      title="Clear focus"
+                      onClick={handleClearFocus}
+                    >
+                      <span>Focus: {focusNames.join(", ")}</span>
+                      <Cross2Icon />
+                    </button>
+                  </>
+                )}
               </div>
+              {view.status === "unknown-name" && (
+                <p className="mt-1 rounded-lg border border-border bg-pane px-2 py-1 text-center text-ui text-text-muted shadow-(--shadow-card)">
+                  No model named {view.unknownNames.join(", ")}. The diagram shows all models.
+                </p>
+              )}
             </Panel>
 
             <Panel position="top-right">

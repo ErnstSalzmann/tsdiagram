@@ -676,6 +676,43 @@ export const selectFunctionsView = (models: Model[]): Model[] => {
   return models.filter((model) => visible.has(model));
 };
 
+/** The focus view. If a name has no model, the view keeps all models and names the unknown names. */
+export type FocusView =
+  | { status: "focused"; models: Model[] }
+  | { status: "unknown-name"; models: Model[]; unknownNames: string[] };
+
+/**
+ * The focus view: the named models and every model within `depth` hops of
+ * them. A hop follows a dependency or a dependant. The walk stays inside
+ * `models`, so a model that an earlier view hides does not link 2 visible models.
+ */
+export const selectFocusView = (models: Model[], names: string[], depth: number): FocusView => {
+  const unknownNames = names.filter((name) => !models.some((model) => model.name === name));
+  if (unknownNames.length > 0) return { status: "unknown-name", models, unknownNames };
+  const ids = new Set(models.map((model) => model.id));
+  const visible = new Set(models.filter((model) => names.includes(model.name)).map((model) => model.id));
+  let frontier = models.filter((model) => visible.has(model.id));
+  for (let hop = 0; hop < depth && frontier.length > 0; hop++) {
+    const next: Model[] = [];
+    for (const model of frontier) {
+      for (const neighbor of [...model.dependencies, ...model.dependants]) {
+        if (!ids.has(neighbor.id) || visible.has(neighbor.id)) continue;
+        visible.add(neighbor.id);
+        next.push(neighbor);
+      }
+    }
+    frontier = next;
+  }
+  return { status: "focused", models: models.filter((model) => visible.has(model.id)) };
+};
+
+/** The focus names from the comma-separated text of the option, without blanks. */
+export const parseFocusNames = (focus: string): string[] =>
+  focus
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+
 /** The source order of each function as its partition. A type joins the first function that uses it. */
 export const computeFunctionPartitions = (models: Model[]): Map<string, number> => {
   const partitions = new Map<string, number>();

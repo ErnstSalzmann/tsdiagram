@@ -9,6 +9,8 @@ import {
   fieldHasSourceEdge,
   ModelNodeState,
   selectCollapsedLeafIds,
+  parseFocusNames,
+  selectFocusView,
   selectFunctionsView,
 } from "./layout";
 
@@ -368,5 +370,48 @@ describe("selectFunctionsView", () => {
     expect(partitions.get("Result")).toBe(0);
     expect(partitions.get("later")).toBe(1);
     expect(partitions.has("Unrelated")).toBe(false);
+  });
+});
+
+describe("selectFocusView", () => {
+  // a chain A -> B -> C -> D, and E that uses B
+  const models = new ModelParser(`
+    interface D { id: string }
+    interface C { d: D }
+    interface B { c: C }
+    interface A { b: B }
+    interface E { b: B }
+  `).getModels();
+  const namesOf = (view: ReturnType<typeof selectFocusView>) => view.models.map((model) => model.name).sort();
+
+  it("keeps only the named model at depth 0", () => {
+    expect(namesOf(selectFocusView(models, ["B"], 0))).toEqual(["B"]);
+  });
+
+  it("keeps the direct dependencies and dependants at depth 1", () => {
+    expect(namesOf(selectFocusView(models, ["B"], 1))).toEqual(["A", "B", "C", "E"]);
+  });
+
+  it("goes 1 hop further at depth 2", () => {
+    expect(namesOf(selectFocusView(models, ["A"], 1))).toEqual(["A", "B"]);
+    expect(namesOf(selectFocusView(models, ["A"], 2))).toEqual(["A", "B", "C", "E"]);
+  });
+
+  it("gives the union of 2 names", () => {
+    expect(namesOf(selectFocusView(models, ["A", "D"], 1))).toEqual(["A", "B", "C", "D"]);
+  });
+
+  it("keeps all models and names an unknown name", () => {
+    const view = selectFocusView(models, ["A", "Missing"], 1);
+    expect(view).toEqual({ status: "unknown-name", models, unknownNames: ["Missing"] });
+  });
+
+  it("does not walk through a model outside the given models", () => {
+    const withoutB = models.filter((model) => model.name !== "B");
+    expect(namesOf(selectFocusView(withoutB, ["A"], 3))).toEqual(["A"]);
+  });
+
+  it("reads the names from comma-separated text", () => {
+    expect(parseFocusNames(" planSync, SyncPlan ,,")).toEqual(["planSync", "SyncPlan"]);
   });
 });
