@@ -385,6 +385,8 @@ export class ModelParser extends Parser {
 
     // the types of the declared aliases: a reference to one of them is named, never inlined
     const namedAliasTypes = new Set(this.typeAliases.map((alias) => alias.type.compilerType));
+    // in an intersection the checker writes `Readonly<{ ... }>` in place of the alias name
+    const namedAliasNames = new Map(this.typeAliases.map((alias) => [alias.type.compilerType, alias.name]));
 
     // first pass: build nodes and models
     const items: ((
@@ -1009,6 +1011,7 @@ export class ModelParser extends Parser {
 
         const elementType = propType.getArrayElementType();
         if (!elementType) return false;
+        if (addArrayOfObjectsProp(prop, propName, propType, elementType)) return true;
 
         const aliasSymbol = elementType.getAliasSymbol();
         const elementTypeName = aliasSymbol ? aliasSymbol.getName() : trimImport(elementType.getText());
@@ -1035,6 +1038,49 @@ export class ModelParser extends Parser {
         });
         if (elementTypeModel) dependencies.add(elementTypeModel);
 
+        return true;
+      };
+
+      // `{ a: A }[]` and `(Named & { a: A })[]` render as 1 box of rows with the
+      // named models in its header. Other parts in the intersection keep the text form.
+      const addArrayOfObjectsProp = (prop: Prop, propName: string, arrayType: Type, elementType: Type) => {
+        const parts = elementType.isIntersection() ? elementType.getIntersectionTypes() : [elementType];
+        const objectParts = parts.filter(isInlineObjectType);
+        if (objectParts.length === 0) return false;
+        const includes: Model[] = [];
+        for (const part of parts) {
+          if (objectParts.includes(part)) continue;
+          const partName =
+            namedAliasNames.get(part.compilerType) ??
+            part.getAliasSymbol()?.getName() ??
+            trimImport(part.getText());
+          const partModel = resolveExactModelReference(partName, item.name, part);
+          if (!partModel) return false;
+          includes.push(partModel);
+        }
+
+        const typeLocation = "typeLocation" in prop ? prop.typeLocation : prop;
+        const objects = objectParts.map((type): InlineObjectMember => ({
+          kind: "object",
+          members: buildInlineObjectMembers(type, typeLocation),
+        }));
+        const typeRefs = collectInlineObjectRefs(objects);
+        for (const model of includes) {
+          typeRefs.add(model);
+          dependencies.add(model);
+        }
+        const modifiers = getPropModifiers(prop);
+        schemaTarget.push({
+          name: propName,
+          type: "object",
+          members: objects.flatMap((object) => object.members),
+          nullable: false,
+          array: { readonly: arrayType.isReadonlyArray() },
+          ...(includes.length > 0 ? { includes } : {}),
+          optional: hasQuestionToken(prop),
+          ...(modifiers.length > 0 ? { modifiers } : {}),
+          ...(typeRefs.size > 0 ? { typeRefs: [...typeRefs] } : {}),
+        });
         return true;
       };
 

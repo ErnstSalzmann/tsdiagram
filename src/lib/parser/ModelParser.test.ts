@@ -3284,7 +3284,7 @@ it("renders an object literal deeper than the depth limit as text", () => {
   expect(field).toEqual({ name: "e", type: "{ f: string; }", optional: false });
 });
 
-it("keeps the object keyword, aliases, and arrays of literals as text or array fields", () => {
+it("keeps the object keyword and aliases as text, and an array of literals as rows", () => {
   const [model] = new ModelParser(`
     type Named = { name: string };
     interface Mixed { plain: object; named: Named; list: { id: string }[] }
@@ -3294,7 +3294,7 @@ it("keeps the object keyword, aliases, and arrays of literals as text or array f
   expect(plain).toEqual({ name: "plain", type: "object", optional: false });
   expect(isObjectSchemaField(plain)).toBe(false);
   expect(named.type).toMatchObject({ name: "Named" });
-  expect(list).toMatchObject({ type: "array", elementType: "{ id: string; }" });
+  expect(list).toMatchObject({ type: "object", array: { readonly: false } });
 });
 
 it("keeps an aliased union of object literals as a reference inside an inline object", () => {
@@ -3405,4 +3405,38 @@ it("links a field to a named alias of Readonly instead of expanding it", () => {
   expect(field?.type).toBe(repository);
   expect(inline && isObjectSchemaField(inline)).toBe(true);
   expect(ports!.dependencies.map((m) => m.name)).toContain("Repository");
+});
+
+it("renders an array of inline objects, and of a model plus an inline object, as rows", () => {
+  const parser = new ModelParser(`
+    type EmployeeDetails = Readonly<{ firstName: string; email: string }>;
+    type ProviderData = Readonly<{
+      employees: readonly (EmployeeDetails & { readonly providerId: string; readonly roleIds: readonly string[] })[];
+      roles: readonly Readonly<{ providerId: string; name: string }>[];
+      tags: { label: string }[];
+    }>;
+  `);
+
+  const models = parser.getModels();
+  const details = models.find((m) => m.name === "EmployeeDetails");
+  const data = models.find((m) => m.name === "ProviderData");
+  const field = (name: string) => {
+    const found = data!.schema.find((f) => f.name === name);
+    if (!found || !isObjectSchemaField(found)) throw new Error(`expected ${name} as an object field`);
+    return found;
+  };
+
+  const employees = field("employees");
+  expect(employees.array).toEqual({ readonly: true });
+  expect(employees.includes).toEqual([details]);
+  expect(employees.members.map((member) => member.name)).toEqual(["providerId", "roleIds"]);
+  expect(employees.typeRefs).toContain(details);
+  expect(data!.dependencies).toContain(details);
+
+  const roles = field("roles");
+  expect(roles.array).toEqual({ readonly: true });
+  expect(roles.includes).toBeUndefined();
+  expect(roles.members.map((member) => member.name)).toEqual(["providerId", "name"]);
+
+  expect(field("tags").array).toEqual({ readonly: false });
 });

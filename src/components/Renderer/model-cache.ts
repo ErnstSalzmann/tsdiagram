@@ -58,6 +58,8 @@ const schemaFieldToken = (field: SchemaField): SchemaFieldToken => {
       kind: "object",
       members: field.members.map(schemaFieldToken),
       nullable: field.nullable,
+      array: field.array ?? null,
+      includes: field.includes?.map(refToken) ?? null,
     };
   }
   return { ...shared, kind: "default", type: refToken(field.type) };

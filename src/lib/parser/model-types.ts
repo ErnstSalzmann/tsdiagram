@@ -30,11 +30,18 @@ export type UnionSchemaField = SharedSchemaField & {
   type: "union";
   types: (InlineObjectMember | Model | string)[];
 };
-/** A field whose type is 1 object literal, with an optional `| null`. */
+/**
+ * A field whose type is 1 object literal, with an optional `| null`. As an array
+ * element, the literal can follow named models: `(A & { b: B })[]`.
+ */
 export type ObjectSchemaField = SharedSchemaField & {
   type: "object";
   members: SchemaField[];
   nullable: boolean;
+  /** Set when the field is a list of the object. */
+  array?: { readonly: boolean };
+  /** The named models that the object is intersected with. */
+  includes?: Model[];
 };
 export type SchemaField =
   | ArraySchemaField

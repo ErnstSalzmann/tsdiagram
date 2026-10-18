@@ -310,15 +310,26 @@ const NestedObject = ({
   context,
   members,
   header,
+  includes = [],
 }: {
   context: FieldContext;
   members: SchemaField[];
   header?: ReactNode;
+  /** Named models in an intersection. Each shows as a spread row, like `...EmployeeDetails`. */
+  includes?: Model[];
 }) => (
   <div className={MODEL_NODE_CLASSES.nested.root}>
     <div className={MODEL_NODE_CLASSES.nested.header}>{header}</div>
     <table className="w-full">
       <tbody>
+        {includes.map((model) => (
+          <tr key={model.id} className={MODEL_NODE_CLASSES.field.root}>
+            <td className={MODEL_NODE_CLASSES.nested.keyCell} colSpan={2}>
+              <Muted>...</Muted>
+              <TypeValue context={context} value={model} />
+            </td>
+          </tr>
+        ))}
         {members.map((member, index) => (
           <FieldRow key={`${member.name}-${index}`} context={context} field={member} nested />
         ))}
@@ -427,7 +438,12 @@ const FieldType = ({ context, field }: { context: FieldContext; field: SchemaFie
   if (isObjectSchemaField(field)) {
     return (
       <div className="flex flex-col text-left">
-        <NestedObject context={context} members={field.members} />
+        <NestedObject
+          context={context}
+          members={field.members}
+          includes={field.includes}
+          header={field.array && `${field.array.readonly ? "readonly " : ""}[ ] each item`}
+        />
         {field.nullable && <Muted>| null</Muted>}
       </div>
     );
