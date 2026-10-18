@@ -40,8 +40,8 @@ const readQueryRendererOptions = () => {
   if (view.success) result.view = view.data;
   const direction = rendererSchema.direction.safeParse(query.get("direction"));
   if (direction.success) result.direction = direction.data;
-  const focus = query.get("focus");
-  if (focus !== null) result.focus = focus;
+  // the focus belongs to a link, not to the stored options: no focus in the link means no focus
+  result.focus = query.get("focus") ?? "";
   const depth = query.get("depth");
   const focusDepth = rendererSchema.focusDepth.safeParse(Number(depth));
   if (depth && focusDepth.success) result.focusDepth = focusDepth.data;
@@ -93,7 +93,7 @@ export const optionsStore = createStore<UserOptions>({
         general: this.general,
         panels: this.panels,
         editor: this.editor,
-        renderer: this.renderer,
+        renderer: { ...this.renderer, focus: "" },
       })
     );
   },
